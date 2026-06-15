@@ -1,0 +1,450 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>古代织绣品虫蛀与霉变协同监测系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app">
+        <header class="app-header">
+            <div class="header-left">
+                <div class="logo">
+                    <svg viewBox="0 0 48 48" width="36" height="36">
+                        <defs>
+                            <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#8B4513"/>
+                                <stop offset="50%" style="stop-color:#D4A574"/>
+                                <stop offset="100%" style="stop-color:#8B2323"/>
+                            </linearGradient>
+                        </defs>
+                        <rect x="4" y="4" width="40" height="40" rx="4" fill="url(#logoGrad)" opacity="0.9"/>
+                        <circle cx="24" cy="24" r="12" fill="none" stroke="#FFF8DC" stroke-width="2"/>
+                        <path d="M14 24 Q24 10 34 24 Q24 38 14 24" fill="none" stroke="#FFF8DC" stroke-width="1.5"/>
+                        <circle cx="24" cy="24" r="3" fill="#FFF8DC"/>
+                    </svg>
+                </div>
+                <div class="header-titles">
+                    <h1>古代织绣品虫蛀与霉变协同监测系统</h1>
+                    <p>某纺织品保护实验室 · 明清织绣保护监测平台</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span>系统运行中</span>
+                </div>
+                <div class="time-display" id="currentTime"></div>
+            </div>
+        </header>
+
+        <nav class="main-nav">
+            <button class="nav-btn active" data-view="dashboard">
+                <span class="nav-icon">📊</span> 监测总览
+            </button>
+            <button class="nav-btn" data-view="textiles">
+                <span class="nav-icon">🧵</span> 织绣品管理
+            </button>
+            <button class="nav-btn" data-view="monitor">
+                <span class="nav-icon">🔬</span> 实时监测
+            </button>
+            <button class="nav-btn" data-view="prediction">
+                <span class="nav-icon">📈</span> 趋势预测
+            </button>
+            <button class="nav-btn" data-view="alerts">
+                <span class="nav-icon">🚨</span> 告警中心
+                <span class="alert-badge" id="alertBadge">0</span>
+            </button>
+        </nav>
+
+        <main class="main-content">
+            <section id="view-dashboard" class="view active">
+                <div class="stats-grid">
+                    <div class="stat-card stat-blue">
+                        <div class="stat-icon">📜</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statTotal">100</div>
+                            <div class="stat-label">织绣品总数</div>
+                        </div>
+                        <div class="stat-trend">明清两代</div>
+                    </div>
+                    <div class="stat-card stat-green">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statNormal">0</div>
+                            <div class="stat-label">状态正常</div>
+                        </div>
+                    </div>
+                    <div class="stat-card stat-yellow">
+                        <div class="stat-icon">⚠️</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statWarning">0</div>
+                            <div class="stat-label">预警状态</div>
+                        </div>
+                    </div>
+                    <div class="stat-card stat-red">
+                        <div class="stat-icon">🚨</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statAlert">0</div>
+                            <div class="stat-label">告警状态</div>
+                        </div>
+                    </div>
+                    <div class="stat-card stat-purple">
+                        <div class="stat-icon">🐛</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statDust">30</div>
+                            <div class="stat-label">粉尘传感器</div>
+                        </div>
+                        <div class="stat-sub">监测蛀虫排泄物</div>
+                    </div>
+                    <div class="stat-card stat-indigo">
+                        <div class="stat-icon">🍄</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statFungi">20</div>
+                            <div class="stat-label">孢子捕捉器</div>
+                        </div>
+                        <div class="stat-sub">监测真菌孢子</div>
+                    </div>
+                    <div class="stat-card stat-teal">
+                        <div class="stat-icon">🕳️</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statHoles">0</div>
+                            <div class="stat-label">虫蛀孔洞标记</div>
+                        </div>
+                    </div>
+                    <div class="stat-card stat-rose">
+                        <div class="stat-icon">🌫️</div>
+                        <div class="stat-info">
+                            <div class="stat-value" id="statMold">0</div>
+                            <div class="stat-label">霉变区域标记</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header">
+                            <h3>织绣品状态分布</h3>
+                            <select id="dynastyFilter">
+                                <option value="">全部朝代</option>
+                            </select>
+                        </div>
+                        <div id="statusChart" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>平均虫蛀密度趋势</h3></div>
+                        <div id="avgHoleChart" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>平均霉菌浓度趋势</h3></div>
+                        <div id="avgFungiChart" class="chart-container"></div>
+                    </div>
+                </div>
+
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>告警统计（近30天）</h3></div>
+                        <div id="alertTrendChart" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>朝代分布</h3></div>
+                        <div id="dynastyChart" class="chart-container"></div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>🚨 最新活动告警</h3>
+                        <button class="btn-outline" onclick="switchView('alerts')">查看全部</button>
+                    </div>
+                    <div class="alert-list" id="dashboardAlertList"></div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>🔬 高风险织绣品 TOP 10</h3>
+                    </div>
+                    <div class="risk-table-wrap">
+                        <table class="data-table" id="topRiskTable">
+                            <thead>
+                                <tr>
+                                    <th>排名</th>
+                                    <th>织绣品</th>
+                                    <th>朝代</th>
+                                    <th>存放位置</th>
+                                    <th>虫蛀密度</th>
+                                    <th>霉菌CFU</th>
+                                    <th>协同风险</th>
+                                    <th>风险等级</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-textiles" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <input type="text" id="searchTextile" placeholder="🔍 搜索织绣品名称、位置..." class="search-input">
+                        <select id="filterDynasty">
+                            <option value="">全部朝代</option>
+                        </select>
+                        <select id="filterStatus">
+                            <option value="">全部状态</option>
+                            <option value="0">正常</option>
+                            <option value="1">预警</option>
+                            <option value="2">告警</option>
+                            <option value="3">严重</option>
+                        </select>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="refreshTextiles()">🔄 刷新</button>
+                    </div>
+                </div>
+                <div class="textile-grid" id="textileGrid"></div>
+                <div class="pagination" id="textilePagination"></div>
+            </section>
+
+            <section id="view-monitor" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <h3 style="margin:0;">🔬 织绣品详情监测</h3>
+                        <select id="monitorTextileSelect">
+                            <option value="">请选择织绣品...</option>
+                        </select>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="loadMonitorData()">加载数据</button>
+                        <label class="toggle-label">
+                            <input type="checkbox" id="toggleHoles" checked>
+                            <span>虫蛀孔洞</span>
+                        </label>
+                        <label class="toggle-label">
+                            <input type="checkbox" id="toggleMold" checked>
+                            <span>霉变区域</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="monitor-layout" id="monitorLayout">
+                    <div class="monitor-empty" id="monitorEmpty">
+                        <div class="empty-icon">🔬</div>
+                        <h3>请选择要监测的织绣品</h3>
+                        <p>从上方下拉列表中选择一件织绣品，查看其详细监测信息</p>
+                    </div>
+
+                    <div class="monitor-content hidden" id="monitorContent">
+                        <div class="image-analysis-card">
+                            <div class="chart-header">
+                                <h3 id="monitorTitle">织绣品图像分析</h3>
+                                <div class="legend-group">
+                                    <div class="legend-item">
+                                        <span class="legend-circle hole"></span>
+                                        <span>虫蛀孔洞 (圆圈)</span>
+                                    </div>
+                                    <div class="legend-item">
+                                        <span class="legend-circle mold"></span>
+                                        <span>霉变区域 (云纹)</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="canvas-container-wrapper">
+                                <div class="canvas-container">
+                                    <canvas id="textileCanvas"></canvas>
+                                    <canvas id="overlayCanvas"></canvas>
+                                    <div class="canvas-loading" id="canvasLoading">
+                                        <div class="spinner"></div>
+                                        <span>正在生成织绣图像...</span>
+                                    </div>
+                                </div>
+                                <div class="canvas-controls">
+                                    <button class="canvas-btn" onclick="zoomCanvas(0.1)">🔍+ 放大</button>
+                                    <button class="canvas-btn" onclick="zoomCanvas(-0.1)">🔍- 缩小</button>
+                                    <button class="canvas-btn" onclick="resetCanvas()">↺ 重置</button>
+                                    <button class="canvas-btn" onclick="exportCanvas()">💾 导出</button>
+                                    <span class="canvas-zoom" id="canvasZoom">100%</span>
+                                </div>
+                            </div>
+                            <div class="monitor-meta" id="monitorMeta"></div>
+                        </div>
+
+                        <div class="monitor-details">
+                            <div class="detail-card">
+                                <h4>🐛 虫蛀孔洞列表</h4>
+                                <div class="mini-table-wrap">
+                                    <table class="mini-table" id="holesTable">
+                                        <thead>
+                                            <tr><th>位置</th><th>半径(mm)</th><th>检测时间</th><th>严重度</th></tr>
+                                        </thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="detail-card">
+                                <h4>🌫️ 霉变区域列表</h4>
+                                <div class="mini-table-wrap">
+                                    <table class="mini-table" id="moldTable">
+                                        <thead>
+                                            <tr><th>中心位置</th><th>半径(mm)</th><th>面积(cm²)</th><th>菌属</th><th>严重度</th></tr>
+                                        </thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="detail-card">
+                                <h4>📡 部署传感器</h4>
+                                <div class="sensor-tags" id="sensorTags"></div>
+                            </div>
+                        </div>
+
+                        <div class="chart-card full">
+                            <div class="chart-header"><h3>虫蛀孔洞密度 & 霉菌浓度 实时趋势</h3></div>
+                            <div id="trendChart" class="chart-container tall"></div>
+                        </div>
+
+                        <div class="chart-card half">
+                            <div class="chart-header"><h3>温湿度监测</h3></div>
+                            <div id="envChart" class="chart-container"></div>
+                        </div>
+
+                        <div class="chart-card half">
+                            <div class="chart-header"><h3>协同风险指数雷达</h3></div>
+                            <div id="riskRadarChart" class="chart-container"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-prediction" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <h3 style="margin:0;">📈 生长趋势预测</h3>
+                        <select id="predictTextileSelect">
+                            <option value="">请选择织绣品...</option>
+                        </select>
+                        <select id="predictHorizon">
+                            <option value="7">未来7天</option>
+                            <option value="14">未来14天</option>
+                            <option value="30" selected>未来30天</option>
+                            <option value="60">未来60天</option>
+                            <option value="90">未来90天</option>
+                        </select>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="runPrediction()">🚀 运行预测</button>
+                    </div>
+                </div>
+
+                <div class="algorithm-info">
+                    <div class="algo-card">
+                        <div class="algo-icon">📐</div>
+                        <div>
+                            <h4>Logistic 方程 (虫蛀种群)</h4>
+                            <p class="formula">dN/dt = rN(1 - N/K)</p>
+                            <p class="algo-desc">基于种群生态学，预测蛀虫种群增长及孔洞密度演化</p>
+                        </div>
+                    </div>
+                    <div class="algo-card">
+                        <div class="algo-icon">📉</div>
+                        <div>
+                            <h4>Gompertz 模型 (霉菌生长)</h4>
+                            <p class="formula">y = A·exp(-B·exp(-C·t))</p>
+                            <p class="algo-desc">适用于丝状真菌S型生长曲线，预测霉菌浓度扩散</p>
+                        </div>
+                    </div>
+                    <div class="algo-card">
+                        <div class="algo-icon">⚡</div>
+                        <div>
+                            <h4>协同风险指数</h4>
+                            <p class="formula">R = √(α·H² + β·F² + γ·H·F·φ)</p>
+                            <p class="algo-desc">综合虫蛀H与霉变F的协同交互效应φ，评估耦合风险</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="predictionResults" class="prediction-results hidden">
+                    <div class="prediction-summary" id="predictionSummary"></div>
+
+                    <div class="charts-row">
+                        <div class="chart-card wide">
+                            <div class="chart-header"><h3>虫蛀孔洞密度预测 (Logistic模型)</h3></div>
+                            <div id="holePredChart" class="chart-container tall"></div>
+                        </div>
+                        <div class="chart-card wide">
+                            <div class="chart-header"><h3>霉菌浓度预测 (Gompertz模型)</h3></div>
+                            <div id="moldPredChart" class="chart-container tall"></div>
+                        </div>
+                    </div>
+
+                    <div class="chart-card full">
+                        <div class="chart-header"><h3>协同风险指数演化预测</h3></div>
+                        <div id="synergyPredChart" class="chart-container tall"></div>
+                    </div>
+
+                    <div class="charts-row">
+                        <div class="chart-card">
+                            <div class="chart-header"><h3>风险等级分布</h3></div>
+                            <div id="riskGaugeChart" class="chart-container"></div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header"><h3>预测置信度</h3></div>
+                            <div id="confidenceChart" class="chart-container"></div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header"><h3>综合评估</h3></div>
+                            <div id="evalCard" class="eval-card-inner"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="prediction-empty" id="predictionEmpty">
+                    <div class="empty-icon">🔮</div>
+                    <h3>选择织绣品并运行预测</h3>
+                    <p>基于 Logistic 种群模型和 Gompertz 生长模型，结合协同风险算法<br>对织绣品未来的虫蛀与霉变趋势进行综合预测</p>
+                </div>
+            </section>
+
+            <section id="view-alerts" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <h3 style="margin:0;">🚨 告警中心</h3>
+                        <select id="filterAlertLevel">
+                            <option value="">全部级别</option>
+                            <option value="2">🔴 紧急</option>
+                            <option value="1">🟡 警告</option>
+                            <option value="0">🔵 通知</option>
+                        </select>
+                        <select id="filterAlertType">
+                            <option value="">全部类型</option>
+                            <option value="1">🕳️ 虫蛀密度</option>
+                            <option value="2">🍄 霉菌浓度</option>
+                            <option value="3">⚡ 协同风险</option>
+                        </select>
+                        <select id="filterAlertResolved">
+                            <option value="false">未解决</option>
+                            <option value="">全部</option>
+                            <option value="true">已解决</option>
+                        </select>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="loadAlerts()">🔄 刷新</button>
+                    </div>
+                </div>
+
+                <div class="alert-stats-grid" id="alertStats"></div>
+
+                <div class="alerts-container" id="alertsContainer"></div>
+            </section>
+        </main>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="js/app.js?v=20250102"></script>
+</body>
+</html>
