@@ -3,7 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Serilog;
-using TextileMonitoring.Infrastructure.Configuration;
+using TextileMonitoring.AlertDispatch.Models;
 
 namespace TextileMonitoring.AlertDispatch.Services;
 

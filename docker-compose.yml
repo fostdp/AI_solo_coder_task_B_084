@@ -1,0 +1,242 @@
+
+version: '3.8'
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: textile-monitoring-sqlserver
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=${DB_PASSWORD:?err}
+      - MSSQL_PID=Developer
+      - MSSQL_AGENT_ENABLED=True
+    ports:
+      - "${DB_PORT:-1433}:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+      - ./db:/db-init:ro
+    command:
+      - /bin/bash
+      - -c
+      - |
+        /opt/mssql/bin/sqlservr &
+        sleep 30
+        /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -d master -i /db-init/InitDatabase.sql 2>/dev/null || true
+        /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -d TextileMonitoringDB -i /db-init/index.sql 2>/dev/null || true
+        /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -d TextileMonitoringDB -i /db-init/partition.sql 2>/dev/null || true
+        wait
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "SA", "-P", "${DB_PASSWORD}", "-Q", "SELECT 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: textile-monitoring-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBIT_USER:-guest}
+      - RABBITMQ_DEFAULT_PASS=${RABBIT_PASSWORD:-guest}
+      - RABBITMQ_DEFAULT_VHOST=${RABBIT_VHOST:-/}
+    ports:
+      - "${RABBIT_PORT:-5672}:5672"
+      - "${RABBIT_MGMT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: textile-monitoring-prometheus
+    ports:
+      - "${PROM_PORT:-9090}:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  zigbee-ingest:
+    build:
+      context: .
+      dockerfile: services/zigbee_ingest/Dockerfile
+    container_name: textile-monitoring-zigbee-ingest
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+      - ZigBeeIngest__UdpListenPort=${ZIGBEE_PORT:-8684}
+      - ZigBeeIngest__UdpReceiveTimeoutMs=${ZIGBEE_TIMEOUT:-5000}
+    ports:
+      - "${ZIGBEE_PORT:-8684}:8684/udp"
+      - "9101:9101"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  population-sim:
+    build:
+      context: .
+      dockerfile: services/population_sim/Dockerfile
+    container_name: textile-monitoring-population-sim
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+    ports:
+      - "9102:9102"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  mildew-gompertz:
+    build:
+      context: .
+      dockerfile: services/mildew_gompertz/Dockerfile
+    container_name: textile-monitoring-mildew-gompertz
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+    ports:
+      - "9103:9103"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  alert-dispatch:
+    build:
+      context: .
+      dockerfile: services/alert_dispatch/Dockerfile
+    container_name: textile-monitoring-alert-dispatch
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+      - AlertSettings__DingTalkWebhook=${DINGTALK_WEBHOOK:-}
+      - AlertSettings__DingTalkSecret=${DINGTALK_SECRET:-}
+      - AlertSettings__SmtpHost=${SMTP_HOST:-}
+      - AlertSettings__SmtpPort=${SMTP_PORT:-587}
+      - AlertSettings__SmtpUser=${SMTP_USER:-}
+      - AlertSettings__SmtpPassword=${SMTP_PASSWORD:-}
+      - AlertSettings__EmailRecipients=${EMAIL_RECIPIENTS:-}
+    ports:
+      - "9104:9104"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: src/textilemonitoring.api/Dockerfile
+    container_name: textile-monitoring-api-gateway
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://0.0.0.0:5000
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+    ports:
+      - "${GATEWAY_PORT:-5000}:5000"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      zigbee-ingest:
+        condition: service_started
+      population-sim:
+        condition: service_started
+      mildew-gompertz:
+        condition: service_started
+      alert-dispatch:
+        condition: service_started
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  zigbee-simulator:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    container_name: textile-monitoring-zigbee-simulator
+    environment:
+      - ZIGBEE_TARGET_HOST=zigbee-ingest
+      - ZIGBEE_TARGET_PORT=${ZIGBEE_PORT:-8684}
+      - SIM_INTERVAL_SECONDS=${SIM_INTERVAL:-14400}
+      - SIM_DUST_SENSORS=30
+      - SIM_FUNGI_SENSORS=20
+      - SIM_OUTBREAK_ENABLED=${SIM_OUTBREAK:-false}
+    depends_on:
+      zigbee-ingest:
+        condition: service_started
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+volumes:
+  sqlserver_data:
+  rabbitmq_data:
+  prometheus_data:
+
+networks:
+  textile-net:
+    driver: bridge

@@ -1,12 +1,12 @@
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
+using Prometheus;
 using Serilog;
 using TextileMonitoring.AlertDispatch.Consumers;
 using TextileMonitoring.AlertDispatch.Models;
 using TextileMonitoring.AlertDispatch.Services;
 using TextileMonitoring.Contracts.Messages;
 using TextileMonitoring.Data;
-using TextileMonitoring.Infrastructure.Configuration;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -18,26 +18,49 @@ try
 
     var builder = Host.CreateDefaultBuilder(args);
 
-    builder.ConfigureTextileMonitoring();
+    builder.ConfigureAppConfiguration((context, config) =>
+    {
+        var env = context.HostingEnvironment;
+        config.SetBasePath(AppContext.BaseDirectory)
+              .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+              .AddJsonFile($"appsettings.{env.EnvironmentName}.json", optional: true, reloadOnChange: true)
+              .AddEnvironmentVariables("TEXTILE_")
+              .AddCommandLine(Environment.GetCommandLineArgs().Skip(1).ToArray());
+    });
+
+    builder.UseSerilog((context, services, loggerConfig) =>
+    {
+        loggerConfig
+            .ReadFrom.Configuration(context.Configuration)
+            .Enrich.FromLogContext()
+            .Enrich.WithProperty("ServiceName", "TextileMonitoring.AlertDispatch")
+            .WriteTo.Console(
+                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{ServiceName}] {Message:lj}{NewLine}{Exception}")
+            .WriteTo.File(
+                path: "logs/log-.txt",
+                rollingInterval: RollingInterval.Day,
+                outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] [{ServiceName}] {Message:lj}{NewLine}{Exception}");
+    });
 
     builder.ConfigureServices((context, services) =>
     {
         var config = context.Configuration;
-        var appConfig = config.GetTextileMonitoringConfig();
 
-        services.AddTextileMonitoringConfig(config);
-
+        services.Configure<RabbitMqConfig>(config.GetSection("RabbitMQ"));
+        services.Configure<DatabaseConfig>(config.GetSection("Database"));
+        services.Configure<NotificationConfig>(config.GetSection("Notifications"));
         services.Configure<AlertDispatchOptions>(config.GetSection("AlertDispatch"));
 
+        var dbConfig = config.GetSection("Database").Get<DatabaseConfig>();
         services.AddDbContext<TextileMonitoringDbContext>(options =>
         {
-            var connectionString = config.GetRequiredConnectionString("DefaultConnection");
+            var connectionString = config.GetConnectionString("DefaultConnection");
             options.UseSqlServer(connectionString, sqlOptions =>
             {
-                sqlOptions.CommandTimeout(appConfig.Database.CommandTimeout);
+                sqlOptions.CommandTimeout(dbConfig!.CommandTimeout);
                 sqlOptions.EnableRetryOnFailure(
-                    maxRetryCount: appConfig.Database.MaxRetryCount,
-                    maxRetryDelay: TimeSpan.FromSeconds(appConfig.Database.MaxRetryDelaySec),
+                    maxRetryCount: dbConfig.MaxRetryCount,
+                    maxRetryDelay: TimeSpan.FromSeconds(dbConfig.MaxRetryDelaySec),
                     errorNumbersToAdd: null);
             });
         });
@@ -123,9 +146,15 @@ try
 
         services.AddMassTransitHostedService();
         services.AddHealthChecks();
+
+        var metricsServer = new MetricServer(port: 9104);
+        services.AddSingleton(metricsServer);
     });
 
     var host = builder.Build();
+
+    var server = host.Services.GetRequiredService<MetricServer>();
+    server.Start();
 
     await host.RunAsync();
 }

@@ -2,7 +2,7 @@ using MailKit.Net.Smtp;
 using MimeKit;
 using Microsoft.Extensions.Options;
 using Serilog;
-using TextileMonitoring.Infrastructure.Configuration;
+using TextileMonitoring.AlertDispatch.Models;
 
 namespace TextileMonitoring.AlertDispatch.Services;
 

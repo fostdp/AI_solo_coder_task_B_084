@@ -3,7 +3,6 @@ using Microsoft.Extensions.Options;
 using Serilog;
 using TextileMonitoring.AlertDispatch.Models;
 using TextileMonitoring.Contracts.Messages;
-using TextileMonitoring.Infrastructure.Configuration;
 
 namespace TextileMonitoring.AlertDispatch.Services;
 

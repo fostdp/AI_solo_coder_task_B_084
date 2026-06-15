@@ -1,8 +1,10 @@
 
 #!/usr/bin/env python3
 """
-ZigBee 粉尘/真菌传感器数据模拟器
-模拟多个织绣品展区的CC2530终端节点数据广播
+ZigBee 粉尘/真菌传感器数据模拟器 (工程化增强版)
+- 支持 30+20=50 设备
+- 支持 4 小时间隔批量上报
+- 支持虫蛀爆发事件注入
 """
 import socket
 import struct
@@ -11,29 +13,56 @@ import time
 import json
 import threading
 import argparse
-from datetime import datetime
+import os
+import sys
+import signal
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+from typing import List, Optional
 
-ZIGBEE_PORT = 8684
-ZIGBEE_MCAST_GRP = "239.255.86.84"
+ZIGBEE_PORT = int(os.environ.get("ZIGBEE_TARGET_PORT", 8684))
+ZIGBEE_TARGET_HOST = os.environ.get("ZIGBEE_TARGET_HOST", "127.0.0.1")
+ZIGBEE_MCAST_GRP = os.environ.get("ZIGBEE_MCAST_GRP", "239.255.86.84")
 
 DYNASTY_SENSOR_CODES = {
-    "云锦-明": ["YJM0001", "YJM0002", "YJM0003", "YJM0004"],
-    "蜀锦-清": ["SJQ0011", "SJQ0012", "SJQ0013"],
-    "宋锦-宋": ["SJS0021", "SJS0022"],
-    "缂丝-元": ["KSY0031", "KSY0032", "KSY0033"],
-    "织金锦-元": ["ZJY0041", "ZJY0042"],
-    "妆花-清": ["ZHQ0051", "ZHQ0052", "ZHQ0053", "ZHQ0054"]
+    "云锦-明": ["YJM0001", "YJM0002", "YJM0003", "YJM0004", "YJM0005", "YJM0006"],
+    "蜀锦-清": ["SJQ0011", "SJQ0012", "SJQ0013", "SJQ0014", "SJQ0015"],
+    "宋锦-宋": ["SJS0021", "SJS0022", "SJS0023", "SJS0024", "SJS0025", "SJS0026"],
+    "缂丝-元": ["KSY0031", "KSY0032", "KSY0033", "KSY0034", "KSY0035", "KSY0036", "KSY0037"],
+    "织金锦-元": ["ZJY0041", "ZJY0042", "ZJY0043", "ZJY0044", "ZJY0045"],
+    "妆花-清": ["ZHQ0051", "ZHQ0052", "ZHQ0053", "ZHQ0054", "ZHQ0055", "ZHQ0056", "ZHQ0057", "ZHQ0058"]
 }
 
 FUNGI_TYPES = ["Aspergillus", "Penicillium", "Cladosporium",
                "Chaetomium", "Trichoderma", "Mucor", "Alternaria"]
+
+DUST_SENSOR_POOL = [f"DUST{i:04d}" for i in range(1, 41)]
+FUNGI_SENSOR_POOL = [f"FNGI{i:04d}" for i in range(1, 31)]
+
+OUTBREAK_STATE = {"active": False, "start_ts": 0, "duration": 3600, "affected_ids": []}
+
+
+@dataclass
+class OutbreakEvent:
+    start_hours_from_now: float
+    duration_seconds: int
+    affected_sensor_fraction: float
+    frass_multiplier: float
+    hole_spike: int
+
+
+DEFAULT_OUTBREAKS = [
+    OutbreakEvent(0.5, 3600, 0.4, 5.0, 3),
+    OutbreakEvent(2.0, 7200, 0.6, 8.0, 5),
+    OutbreakEvent(3.5, 1800, 0.3, 3.0, 2)
+]
 
 
 @dataclass
 class SensorState:
     code: str
     addr: int
+    sensor_type: str
     last_pm25: float = 35.0
     last_pm10: float = 60.0
     last_frass: float = 0.02
@@ -45,8 +74,10 @@ class SensorState:
     last_dominant: str = "Aspergillus"
     textile_id: int = 0
     drift: float = field(default_factory=lambda: random.uniform(-0.02, 0.02))
+    outbreak_boost_frass: float = 1.0
+    outbreak_boost_holes: int = 0
 
-    def tick(self):
+    def tick(self, outbreak_active: bool = False):
         env_shift = random.gauss(0, 0.15)
         self.last_temp = max(16, min(32, self.last_temp + env_shift * 0.4))
         self.last_hum = max(35, min(78, self.last_hum + env_shift * 1.2 + self.drift * 2))
@@ -55,9 +86,12 @@ class SensorState:
         hum_factor = 1.0 + (self.last_hum - 55) * 0.018
 
         pest_growth = max(0, temp_factor * hum_factor * 0.008 + random.gauss(0, 0.003))
-        self.last_frass = max(0.005, min(14, self.last_frass + pest_growth))
+        effective_frass_mult = pest_growth * self.outbreak_boost_frass if outbreak_active else pest_growth
+        self.last_frass = max(0.005, min(14, self.last_frass + effective_frass_mult))
 
-        self.last_holes += random.choices([0, 1, 2], weights=[88, 10, 2])[0]
+        hole_weights = [88, 10, 2]
+        extra_holes = self.outbreak_boost_holes if outbreak_active else 0
+        self.last_holes += random.choices([0, 1, 2], weights=hole_weights)[0] + extra_holes
 
         self.last_pm25 = max(8, min(180, self.last_pm25 + random.gauss(0, 4) + self.last_frass * 6))
         self.last_pm10 = max(15, min(260, self.last_pm10 + random.gauss(0, 7) + self.last_frass * 10))
@@ -106,47 +140,103 @@ def build_fungi_packet(state: SensorState) -> bytes:
     return bytes(packet[:68])
 
 
-def broadcast_loop(states, stop_evt, interval, use_multicast=True):
+def schedule_outbreaks(states: List[SensorState], stop_evt: threading.Event,
+                       outbreaks: List[OutbreakEvent], start_time: float):
+    pending = sorted(outbreaks, key=lambda o: o.start_hours_from_now)
+    idx = 0
+    while idx < len(pending) and not stop_evt.is_set():
+        evt = pending[idx]
+        fire_at = start_time + evt.start_hours_from_now * 3600
+        while time.time() < fire_at and not stop_evt.is_set():
+            if stop_evt.wait(1.0):
+                return
+        if stop_evt.is_set():
+            return
+        OUTBREAK_STATE["active"] = True
+        OUTBREAK_STATE["start_ts"] = time.time()
+        OUTBREAK_STATE["duration"] = evt.duration_seconds
+        affected_count = max(1, int(len(states) * evt.affected_sensor_fraction))
+        affected = random.sample(states, affected_count)
+        OUTBREAK_STATE["affected_ids"] = [s.code for s in affected]
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️ 虫蛀爆发事件启动！"
+              f"影响 {affected_count}/{len(states)} 设备 "
+              f"(frass x{evt.frass_multiplier}, holes+{evt.hole_spike})")
+        for s in affected:
+            s.outbreak_boost_frass = evt.frass_multiplier
+            s.outbreak_boost_holes = evt.hole_spike
+        until = time.time() + evt.duration_seconds
+        while time.time() < until and not stop_evt.is_set():
+            if stop_evt.wait(1.0):
+                return
+        for s in affected:
+            s.outbreak_boost_frass = 1.0
+            s.outbreak_boost_holes = 0
+        OUTBREAK_STATE["active"] = False
+        OUTBREAK_STATE["affected_ids"] = []
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 虫蛀爆发事件结束，已恢复正常\n")
+        idx += 1
+
+
+def broadcast_loop(states, stop_evt, interval, target_host, target_port, batch_seconds=0):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    if use_multicast:
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 32)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        target = (ZIGBEE_MCAST_GRP, ZIGBEE_PORT)
-    else:
-        target = ("127.0.0.1", ZIGBEE_PORT)
+    target = (target_host, target_port)
 
     seq = 0
     tx_count = 0
     collide_count = 0
+    batch_buffer = []
+    batch_deadline = 0
 
     while not stop_evt.is_set():
         for s in states:
-            s.tick()
+            s.tick(outbreak_active=OUTBREAK_STATE["active"])
 
-            sleep_jitter = random.uniform(0, interval / 3.0)
+            sleep_jitter = random.uniform(0, max(0.1, interval / 3.0))
             if stop_evt.wait(sleep_jitter):
                 break
 
             if random.random() < 0.04:
                 collide_count += 1
                 fake_damage = build_dust_packet(s)
-                sock.sendto(fake_damage, target)
+                batch_buffer.append(fake_damage)
                 tx_count += 1
                 continue
 
-            if random.random() < 0.55:
+            if random.random() < 0.55 or s.sensor_type == "dust":
                 pkt = build_dust_packet(s)
             else:
                 pkt = build_fungi_packet(s)
-            sock.sendto(pkt, target)
+            batch_buffer.append(pkt)
             tx_count += 1
 
             seq += 1
             if tx_count % 200 == 0:
                 now = datetime.now().strftime("%H:%M:%S")
-                print(f"[{now}] TX={tx_count:5d} 碰撞包={collide_count:3d}  "
+                outbreak_tag = " [OUTBREAK]" if OUTBREAK_STATE["active"] else ""
+                print(f"[{now}] TX={tx_count:5d} 碰撞包={collide_count:3d}{outbreak_tag}  "
                       f"最新: {s.code} T={s.last_temp:4.1f}°C RH={s.last_hum:4.1f}% "
                       f"frass={s.last_frass:6.4f} CFU={s.last_cfu:7.1f} holes={s.last_holes}")
+
+        if batch_seconds > 0:
+            if batch_deadline == 0:
+                batch_deadline = time.time() + batch_seconds
+            if batch_buffer and time.time() >= batch_deadline:
+                for pkt in batch_buffer:
+                    try:
+                        sock.sendto(pkt, target)
+                    except Exception as e:
+                        print(f"[发送错误] {e}")
+                if len(batch_buffer) > 0:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📦 批量发送 {len(batch_buffer)} 个数据包")
+                batch_buffer = []
+                batch_deadline = time.time() + batch_seconds
+        else:
+            for pkt in batch_buffer:
+                try:
+                    sock.sendto(pkt, target)
+                except Exception as e:
+                    print(f"[发送错误] {e}")
+            batch_buffer = []
 
         if stop_evt.wait(interval):
             break
@@ -154,64 +244,150 @@ def broadcast_loop(states, stop_evt, interval, use_multicast=True):
     sock.close()
 
 
-def run_mesh_broadcast(duration: int, interval: float = 0.8):
-    states = []
-    next_tid = 1
+def build_initial_states(dust_count: int, fungi_count: int) -> List[SensorState]:
+    states: List[SensorState] = []
+    all_codes = []
     for _, codes in DYNASTY_SENSOR_CODES.items():
-        for i, code in enumerate(codes):
-            states.append(SensorState(
-                code=code,
-                addr=0x7800 + next_tid + i,
-                textile_id=next_tid
-            ))
-        next_tid += len(codes)
+        all_codes.extend(codes)
+    random.shuffle(all_codes)
 
-    print(f"=== 织绣品ZigBee传感器模拟器启动 ===")
-    print(f"节点总数: {len(states)}")
-    print(f"目标地址: {ZIGBEE_MCAST_GRP}:{ZIGBEE_PORT} (组播) / 127.0.0.1:{ZIGBEE_PORT} (单播回退)")
-    print(f"发送间隔: {interval}s ± {interval/3:.2f}s (有抖动)")
-    print(f"模拟时长: {duration if duration > 0 else '∞'}秒")
-    print(f"=" * 44)
+    needed = dust_count + fungi_count
+    extended = all_codes * ((needed // len(all_codes)) + 1)
+    chosen = extended[:needed]
+
+    tid = 1
+    for i, code in enumerate(chosen):
+        stype = "dust" if i < dust_count else "fungi"
+        states.append(SensorState(
+            code=code,
+            addr=0x7800 + 1 + i,
+            sensor_type=stype,
+            textile_id=tid
+        ))
+        tid += 1
+    random.shuffle(states)
+    return states
+
+
+def run_mesh_broadcast(duration: int, interval: float,
+                       dust_sensors: int, fungi_sensors: int,
+                       enable_outbreak: bool, target_host: str,
+                       target_port: int, batch_seconds: int):
+    states = build_initial_states(dust_sensors, fungi_sensors)
+    dust_states = [s for s in states if s.sensor_type == "dust"]
+    fungi_states = [s for s in states if s.sensor_type == "fungi"]
+
+    print("=" * 60)
+    print("    织绣品ZigBee传感器模拟器 (工程化增强版)")
+    print("=" * 60)
+    print(f"  粉尘传感器数: {len(dust_states)}")
+    print(f"  真菌传感器数: {len(fungi_states)}")
+    print(f"  传感器总数:   {len(states)}")
+    print(f"  目标地址:     {target_host}:{target_port}")
+    print(f"  节点间隔:     {interval}s")
+    print(f"  批量发送:     {batch_seconds}s" if batch_seconds > 0 else "  批量发送:     关闭")
+    print(f"  虫蛀爆发:     {'启用' if enable_outbreak else '禁用'}")
+    print(f"  模拟时长:     {duration if duration > 0 else '∞'}秒")
+    print("=" * 60)
 
     stop_evt = threading.Event()
 
-    thread_mesh = threading.Thread(
-        target=broadcast_loop,
-        args=(states, stop_evt, interval, True),
-        daemon=True,
-        name="zigbee-mesh-mcast"
-    )
-    thread_direct = threading.Thread(
-        target=broadcast_loop,
-        args=(states, stop_evt, interval * 1.3, False),
-        daemon=True,
-        name="zigbee-direct-ucast"
-    )
+    threads = []
+    if dust_states:
+        t = threading.Thread(
+            target=broadcast_loop,
+            args=(dust_states, stop_evt, interval, target_host, target_port, batch_seconds),
+            daemon=True,
+            name="zigbee-dust"
+        )
+        threads.append(t)
+    if fungi_states:
+        t = threading.Thread(
+            target=broadcast_loop,
+            args=(fungi_states, stop_evt, interval * 1.3, target_host, target_port, batch_seconds),
+            daemon=True,
+            name="zigbee-fungi"
+        )
+        threads.append(t)
 
-    thread_mesh.start()
-    thread_direct.start()
+    if enable_outbreak:
+        t = threading.Thread(
+            target=schedule_outbreaks,
+            args=(states, stop_evt, DEFAULT_OUTBREAKS, time.time()),
+            daemon=True,
+            name="outbreak-scheduler"
+        )
+        threads.append(t)
+
+    for t in threads:
+        t.start()
+
+    def handle_sigint(signum, frame):
+        print("\n[用户中断] 正在停止所有广播线程...")
+        stop_evt.set()
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigint)
 
     start = time.time()
     try:
         while True:
             if duration > 0 and time.time() - start >= duration:
                 break
-            time.sleep(0.5)
+            stop_evt.wait(1.0)
     except KeyboardInterrupt:
-        print("\n[用户中断] 正在停止所有广播线程...")
+        pass
 
     stop_evt.set()
-    thread_mesh.join(timeout=3)
-    thread_direct.join(timeout=3)
+    for t in threads:
+        t.join(timeout=5)
     print(f"[完成] ZigBee广播模拟器已退出")
+
+
+def parse_env_bool(name: str, default: bool = False) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 def main():
     ap = argparse.ArgumentParser(description="织绣品监测ZigBee传感器数据模拟器")
-    ap.add_argument("-d", "--duration", type=int, default=0, help="运行时长(秒)，0=无限")
-    ap.add_argument("-i", "--interval", type=float, default=0.8, help="每个节点的发送间隔基础值")
+    ap.add_argument("-d", "--duration", type=int,
+                    default=int(os.environ.get("SIM_DURATION", "0")),
+                    help="运行时长(秒)，0=无限")
+    ap.add_argument("-i", "--interval", type=float,
+                    default=float(os.environ.get("SIM_INTERVAL_SECONDS", "0.8")),
+                    help="每个节点的发送间隔基础值(秒)")
+    ap.add_argument("--dust-sensors", type=int,
+                    default=int(os.environ.get("SIM_DUST_SENSORS", "30")),
+                    help="粉尘传感器数量")
+    ap.add_argument("--fungi-sensors", type=int,
+                    default=int(os.environ.get("SIM_FUNGI_SENSORS", "20")),
+                    help="真菌传感器数量")
+    ap.add_argument("--outbreak", action="store_true",
+                    default=parse_env_bool("SIM_OUTBREAK_ENABLED", False),
+                    help="启用虫蛀爆发事件注入")
+    ap.add_argument("--target-host", type=str,
+                    default=os.environ.get("ZIGBEE_TARGET_HOST", "127.0.0.1"),
+                    help="目标主机")
+    ap.add_argument("--target-port", type=int,
+                    default=int(os.environ.get("ZIGBEE_TARGET_PORT", "8684")),
+                    help="目标端口")
+    ap.add_argument("--batch-seconds", type=int,
+                    default=int(os.environ.get("SIM_BATCH_SECONDS", "0")),
+                    help="批量发送时间窗口(秒)，0=立即发送")
     args = ap.parse_args()
-    run_mesh_broadcast(args.duration, args.interval)
+    run_mesh_broadcast(
+        duration=args.duration,
+        interval=args.interval,
+        dust_sensors=args.dust_sensors,
+        fungi_sensors=args.fungi_sensors,
+        enable_outbreak=args.outbreak,
+        target_host=args.target_host,
+        target_port=args.target_port,
+        batch_seconds=args.batch_seconds
+    )
 
 
 if __name__ == "__main__":

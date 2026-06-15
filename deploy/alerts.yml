@@ -1,0 +1,47 @@
+groups:
+  - name: textile-monitoring-alerts
+    rules:
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "高内存使用率告警"
+          description: "内存使用率已超过 85%，当前值: {{ $value | printf \"%.2f\" }}%"
+
+      - alert: HighCPUUsage
+        expr: (1 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])))) * 100 > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "高 CPU 使用率告警"
+          description: "CPU 使用率已超过 80%，当前值: {{ $value | printf \"%.2f\" }}%"
+
+      - alert: APIGatewayUnreachable
+        expr: up{job="api-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 网关不可达"
+          description: "API 网关 /healthz 健康检查失败，服务可能已宕机"
+
+      - alert: RabbitMQQueueBacklog
+        expr: rabbitmq_queue_messages > 10000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ 队列积压告警"
+          description: "队列 {{ $labels.queue }} 消息积压已超过 10000 条，当前值: {{ $value }}"
+
+      - alert: LowDiskSpace
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "磁盘空间不足告警"
+          description: "磁盘 {{ $labels.mountpoint }} 可用空间已不足 10%，当前值: {{ $value | printf \"%.2f\" }}%"

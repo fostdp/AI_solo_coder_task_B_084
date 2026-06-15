@@ -4,7 +4,7 @@ using Microsoft.Extensions.Options;
 using Serilog;
 using TextileMonitoring.Contracts.Messages;
 using TextileMonitoring.Data;
-using TextileMonitoring.Infrastructure.Configuration;
+using TextileMonitoring.MildewGompertz.Models;
 
 namespace TextileMonitoring.MildewGompertz;
 

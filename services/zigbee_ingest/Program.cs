@@ -1,5 +1,6 @@
 
 using MassTransit;
+using Prometheus;
 using Serilog;
 using TextileMonitoring.Contracts.Messages;
 using TextileMonitoring.Contracts.RabbitMQ;
@@ -106,9 +107,16 @@ try
         services.AddMassTransitHostedService();
         services.AddHostedService<ZigBeeUdpListenerWorker>();
         services.AddHealthChecks();
+
+        var metricsServer = new MetricServer(port: 9101);
+        services.AddSingleton(metricsServer);
     });
 
     var host = builder.Build();
+
+    var server = host.Services.GetRequiredService<MetricServer>();
+    server.Start();
+
     await host.RunAsync();
 }
 catch (Exception ex)
