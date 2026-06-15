@@ -65,3 +65,31 @@ scrape_configs:
       - targets: ['sqlserver-exporter:9399']
     scrape_interval: 30s
     scrape_timeout: 10s
+
+  - job_name: 'pest-classifier'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['pest-classifier:9105']
+    scrape_interval: 15s
+    scrape_timeout: 5s
+
+  - job_name: 'voc-classifier'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['voc-classifier:9106']
+    scrape_interval: 15s
+    scrape_timeout: 5s
+
+  - job_name: 'treatment-simulator'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['treatment-simulator:9107']
+    scrape_interval: 15s
+    scrape_timeout: 5s
+
+  - job_name: 'vulnerability-engine'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['vulnerability-engine:9108']
+    scrape_interval: 30s
+    scrape_timeout: 10s

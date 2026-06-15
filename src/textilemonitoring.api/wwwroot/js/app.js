@@ -58,6 +58,21 @@ function switchView(viewName) {
     if (viewName === 'dashboard') loadDashboard();
     if (viewName === 'textiles') loadTextiles();
     if (viewName === 'alerts') loadAlerts();
+    if (viewName === 'pest-classification' && typeof window.initPestClassificationView === 'function') {
+        setTimeout(window.initPestClassificationView, 80);
+    }
+    if (viewName === 'voc-monitoring' && typeof window.initVocMonitoringView === 'function') {
+        setTimeout(window.initVocMonitoringView, 80);
+    }
+    if (viewName === 'nitrogen-treatment' && typeof window.initNitrogenTreatmentView === 'function') {
+        setTimeout(window.initNitrogenTreatmentView, 80);
+    }
+    if (viewName === 'vulnerability-board' && typeof window.initVulnerabilityBoardView === 'function') {
+        setTimeout(window.initVulnerabilityBoardView, 80);
+    }
+    if (window.EChartsOverlay && typeof window.EChartsOverlay.resizeAll === 'function') {
+        setTimeout(window.EChartsOverlay.resizeAll, 200);
+    }
 }
 
 function toast(message, type = 'info', duration = 2500) {
@@ -229,6 +244,31 @@ function mockApiFallback(url) {
             });
         }
         return arr;
+    }
+    if (url.startsWith('/pest-classification/stats') && typeof window.generatePestMockData === 'function') {
+        return window.generatePestMockData();
+    }
+    if (url.startsWith('/voc-monitoring/data') && typeof window.generateVocMockData === 'function') {
+        return window.generateVocMockData();
+    }
+    if (url.startsWith('/treatment-vulnerability/nitrogen/submit')) {
+        const body = (typeof arguments[1] === 'object' && arguments[1]?.body) ? JSON.parse(arguments[1].body) : {};
+        const stage = body.targetStage || '幼虫';
+        const oxygen = body.oxygenPercent || 1.0;
+        const time = body.exposureMinutes || 720;
+        const stageIdx = Math.max(0, ['虫卵','幼虫','成虫','真菌'].indexOf(stage));
+        const m = window.calculateMortality ? window.calculateMortality(oxygen, time, stageIdx) : 92;
+        return {
+            success: true,
+            estimatedMortality: +Math.min(99.9, m).toFixed(2),
+            estimatedLossPercent: +((time / 1440) * (0.8 + oxygen * 0.15)).toFixed(3),
+            estimatedDeltaE: +((time / 1440) * (0.6 + oxygen * 0.08)).toFixed(3),
+            nitrogenConsumptionCubicMeters: +((body.nitrogenFlow || 12) * time / 60).toFixed(2),
+            confidenceInterval: [+Math.max(0, m - 5).toFixed(2), +Math.min(100, m + 5).toFixed(2)]
+        };
+    }
+    if (url.startsWith('/vulnerability/topsis') && typeof window.generateVulnerabilityMockData === 'function') {
+        return window.generateVulnerabilityMockData(100);
     }
     return null;
 }

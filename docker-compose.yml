@@ -24,6 +24,7 @@ services:
         /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -d master -i /db-init/InitDatabase.sql 2>/dev/null || true
         /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -d TextileMonitoringDB -i /db-init/index.sql 2>/dev/null || true
         /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -d TextileMonitoringDB -i /db-init/partition.sql 2>/dev/null || true
+        /opt/mssql-tools/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -d TextileMonitoringDB -i /db-init/index_features.sql 2>/dev/null || true
         wait
     healthcheck:
       test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "SA", "-P", "${DB_PASSWORD}", "-Q", "SELECT 1"]
@@ -209,6 +210,14 @@ services:
         condition: service_started
       alert-dispatch:
         condition: service_started
+      pest-classifier:
+        condition: service_started
+      voc-classifier:
+        condition: service_started
+      treatment-simulator:
+        condition: service_started
+      vulnerability-engine:
+        condition: service_started
     networks:
       - textile-net
     restart: unless-stopped
@@ -224,10 +233,109 @@ services:
       - SIM_INTERVAL_SECONDS=${SIM_INTERVAL:-14400}
       - SIM_DUST_SENSORS=30
       - SIM_FUNGI_SENSORS=20
+      - SIM_VOC_SENSORS=15
+      - SIM_FRASS_IMAGE_SENSORS=10
       - SIM_OUTBREAK_ENABLED=${SIM_OUTBREAK:-false}
     depends_on:
       zigbee-ingest:
         condition: service_started
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  pest-classifier:
+    build:
+      context: .
+      dockerfile: services/pest_classifier/Dockerfile
+    container_name: textile-monitoring-pest-classifier
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+    ports:
+      - "9105:9105"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  voc-classifier:
+    build:
+      context: .
+      dockerfile: services/voc_classifier/Dockerfile
+    container_name: textile-monitoring-voc-classifier
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+    ports:
+      - "9106:9106"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  treatment-simulator:
+    build:
+      context: .
+      dockerfile: services/treatment_simulator/Dockerfile
+    container_name: textile-monitoring-treatment-sim
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+    ports:
+      - "9107:9107"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - textile-net
+    restart: unless-stopped
+
+  vulnerability-engine:
+    build:
+      context: .
+      dockerfile: services/vulnerability_engine/Dockerfile
+    container_name: textile-monitoring-vulnerability-engine
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=${DB_NAME:-TextileMonitoringDB};User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True;Connect Timeout=30;
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__VirtualHost=${RABBIT_VHOST:-/}
+      - RabbitMQ__Username=${RABBIT_USER:-guest}
+      - RabbitMQ__Password=${RABBIT_PASSWORD:-guest}
+      - VulnerabilityConfig__RunIntervalSeconds=10800
+    ports:
+      - "9108:9108"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - textile-net
     restart: unless-stopped

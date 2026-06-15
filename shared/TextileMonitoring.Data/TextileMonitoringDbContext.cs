@@ -20,6 +20,13 @@ public class TextileMonitoringDbContext : DbContext
     public DbSet<Prediction> Predictions => Set<Prediction>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<AlertConfig> AlertConfigs => Set<AlertConfig>();
+    public DbSet<FrassImageCapture> FrassImageCaptures => Set<FrassImageCapture>();
+    public DbSet<PestClassificationRecord> PestClassificationRecords => Set<PestClassificationRecord>();
+    public DbSet<VocSensorData> VocSensorData => Set<VocSensorData>();
+    public DbSet<VocClassificationRecord> VocClassificationRecords => Set<VocClassificationRecord>();
+    public DbSet<NitrogenTreatmentSession> NitrogenTreatmentSessions => Set<NitrogenTreatmentSession>();
+    public DbSet<FiberStrengthTest> FiberStrengthTests => Set<FiberStrengthTest>();
+    public DbSet<VulnerabilityAssessment> VulnerabilityAssessments => Set<VulnerabilityAssessment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -98,6 +105,71 @@ public class TextileMonitoringDbContext : DbContext
         modelBuilder.Entity<AlertConfig>(entity =>
         {
             entity.HasIndex(e => e.ConfigKey).IsUnique();
+        });
+
+        modelBuilder.Entity<FrassImageCapture>(entity =>
+        {
+            entity.HasIndex(e => new { e.SensorId, e.CaptureTime });
+            entity.HasIndex(e => new { e.TextileId, e.CaptureTime });
+            entity.HasOne(e => e.Textile)
+                .WithMany(t => t.FrassImageCaptures)
+                .HasForeignKey(e => e.TextileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PestClassificationRecord>(entity =>
+        {
+            entity.HasIndex(e => new { e.TextileId, e.ClassifiedAt });
+            entity.HasIndex(e => new { e.PredictedSpeciesId, e.ClassifiedAt });
+            entity.HasOne(e => e.Textile)
+                .WithMany(t => t.PestClassificationRecords)
+                .HasForeignKey(e => e.TextileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<VocSensorData>(entity =>
+        {
+            entity.HasIndex(e => new { e.SensorId, e.ReadingTime });
+            entity.HasIndex(e => new { e.TextileId, e.ReadingTime });
+        });
+
+        modelBuilder.Entity<VocClassificationRecord>(entity =>
+        {
+            entity.HasIndex(e => new { e.TextileId, e.ClassifiedAt });
+            entity.HasIndex(e => new { e.PredictedMoldSpeciesId, e.ClassifiedAt });
+            entity.HasOne(e => e.Textile)
+                .WithMany(t => t.VocClassificationRecords)
+                .HasForeignKey(e => e.TextileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<NitrogenTreatmentSession>(entity =>
+        {
+            entity.HasIndex(e => new { e.TextileId, e.CreatedAt });
+            entity.HasIndex(e => e.SessionStatus);
+            entity.HasOne(e => e.Textile)
+                .WithMany(t => t.NitrogenTreatmentSessions)
+                .HasForeignKey(e => e.TextileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FiberStrengthTest>(entity =>
+        {
+            entity.HasIndex(e => new { e.TextileId, e.TestDate });
+            entity.HasOne(e => e.Textile)
+                .WithMany(t => t.FiberStrengthTests)
+                .HasForeignKey(e => e.TextileId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<VulnerabilityAssessment>(entity =>
+        {
+            entity.HasIndex(e => new { e.TextileId, e.AssessmentDate });
+            entity.HasIndex(e => e.PriorityId);
+            entity.HasOne(e => e.Textile)
+                .WithMany(t => t.VulnerabilityAssessments)
+                .HasForeignKey(e => e.TextileId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

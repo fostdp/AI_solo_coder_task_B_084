@@ -33,6 +33,10 @@
     <ProjectReference Include="..\..\services\population_sim\PopulationSim.Service.csproj" />
     <ProjectReference Include="..\..\services\mildew_gompertz\TextileMonitoring.MildewGompertz.csproj" />
     <ProjectReference Include="..\..\services\alert_dispatch\AlertDispatch.csproj" />
+    <ProjectReference Include="..\..\services\pest_classifier\PestClassifier.csproj" />
+    <ProjectReference Include="..\..\services\voc_classifier\VocClassifier.csproj" />
+    <ProjectReference Include="..\..\services\treatment_simulator\TreatmentSimulator.csproj" />
+    <ProjectReference Include="..\..\services\vulnerability_engine\VulnerabilityEngine.csproj" />
   </ItemGroup>
 
 </Project>

@@ -19,6 +19,14 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PopulationSim.Service", "se
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AlertDispatch", "services\alert_dispatch\AlertDispatch.csproj", "{B8C9D0E1-F2A3-4567-1234-789012345678}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PestClassifier", "services\pest_classifier\PestClassifier.csproj", "{D0E1F2A3-B4C5-6789-3456-901234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VocClassifier", "services\voc_classifier\VocClassifier.csproj", "{E1F2A3B4-C5D6-7890-4567-012345678901}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TreatmentSimulator", "services\treatment_simulator\TreatmentSimulator.csproj", "{F2A3B4C5-D6E7-8901-5678-123456789012}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VulnerabilityEngine", "services\vulnerability_engine\VulnerabilityEngine.csproj", "{A3B4C5D6-E7F8-9012-6789-234567890123}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TextileMonitoring.Tests", "tests\TextileMonitoring.Tests\TextileMonitoring.Tests.csproj", "{C9D0E1F2-A3B4-5678-2345-890123456789}"
 EndProject
 Global
@@ -59,6 +67,22 @@ Global
 		{B8C9D0E1-F2A3-4567-1234-789012345678}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B8C9D0E1-F2A3-4567-1234-789012345678}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B8C9D0E1-F2A3-4567-1234-789012345678}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-901234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-901234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-901234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0E1F2A3-B4C5-6789-3456-901234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-012345678901}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-012345678901}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-012345678901}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E1F2A3B4-C5D6-7890-4567-012345678901}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-123456789012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-123456789012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-123456789012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F2A3B4C5-D6E7-8901-5678-123456789012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-234567890123}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-234567890123}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-234567890123}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A3B4C5D6-E7F8-9012-6789-234567890123}.Release|Any CPU.Build.0 = Release|Any CPU
 		{C9D0E1F2-A3B4-5678-2345-890123456789}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{C9D0E1F2-A3B4-5678-2345-890123456789}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C9D0E1F2-A3B4-5678-2345-890123456789}.Release|Any CPU.ActiveCfg = Release|Any CPU

@@ -7,6 +7,7 @@
     <title>古代织绣品虫蛀与霉变协同监测系统</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/features.css">
 </head>
 <body>
     <div id="app">
@@ -57,6 +58,18 @@
             <button class="nav-btn" data-view="alerts">
                 <span class="nav-icon">🚨</span> 告警中心
                 <span class="alert-badge" id="alertBadge">0</span>
+            </button>
+            <button class="nav-btn" data-view="pest-classification">
+                <span class="nav-icon">🐛</span> 蛀虫鉴别
+            </button>
+            <button class="nav-btn" data-view="voc-monitoring">
+                <span class="nav-icon">🍄</span> VOC霉变预警
+            </button>
+            <button class="nav-btn" data-view="nitrogen-treatment">
+                <span class="nav-icon">💨</span> 充氮杀虫模拟
+            </button>
+            <button class="nav-btn" data-view="vulnerability-board">
+                <span class="nav-icon">📊</span> 脆弱性看板
             </button>
         </nav>
 
@@ -441,6 +454,186 @@
 
                 <div class="alerts-container" id="alertsContainer"></div>
             </section>
+
+            <section id="view-pest-classification" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <h2 style="margin:0;">🐛 蛀虫种类鉴别</h2>
+                        <p style="margin:0;color:var(--text-muted);font-size:13px;">基于图像特征与粉尘传感器数据的5类蛀虫智能鉴别分析</p>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="initPestClassificationView()">🔄 刷新数据</button>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>5类蛀虫种类分布（按朝代分组）</h3></div>
+                        <div id="pestSpeciesBarChart" class="chart-container tall"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>单织绣蛀虫概率雷达</h3></div>
+                        <div id="pestProbabilityRadar" class="chart-container"></div>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>蛀虫龄期分布直方图</h3></div>
+                        <div id="instarsHistogram" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>30天虫蛀种类时间序列</h3></div>
+                        <div id="pestTrendLine" class="chart-container tall"></div>
+                    </div>
+                </div>
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>📋 蛀虫鉴别详情表</h3>
+                    </div>
+                    <div class="risk-table-wrap">
+                        <table class="data-table" id="pestDetailTable">
+                            <thead>
+                                <tr>
+                                    <th>织绣编号</th>
+                                    <th>织绣名称</th>
+                                    <th>朝代</th>
+                                    <th>优势蛀虫</th>
+                                    <th>置信度</th>
+                                    <th>龄期结构</th>
+                                    <th>虫口密度</th>
+                                    <th>风险等级</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-voc-monitoring" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <h2 style="margin:0;">🍄 VOC霉变预警</h2>
+                        <p style="margin:0;color:var(--text-muted);font-size:13px;">9项挥发性有机化合物实时监测 + 6种霉菌生物量预测</p>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="initVocMonitoringView()">🔄 刷新监测</button>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>9种VOC指标24小时堆叠面积图（双Y轴）</h3></div>
+                        <div id="vocStackedAreaChart" class="chart-container tall"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>6种霉菌种类环形图</h3></div>
+                        <div id="moldSpeciesDonutChart" class="chart-container"></div>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>VOC 9维雷达图（含阈值线）</h3></div>
+                        <div id="vocRadarChart" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>霉菌毒素风险指数</h3></div>
+                        <div id="mycotoxinRiskGauge" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>估计生物量生长预测曲线</h3></div>
+                        <div id="biomassPredictLineChart" class="chart-container"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-nitrogen-treatment" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <h2 style="margin:0;">💨 充氮杀虫治疗模拟</h2>
+                        <p style="margin:0;color:var(--text-muted);font-size:13px;">基于Probit模型的低氧杀虫剂量-死亡率响应模拟控制面板</p>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="initNitrogenTreatmentView()">🔄 重置面板</button>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card treatment-panel" style="grid-column: span 1;">
+                        <div class="chart-header"><h3>⚙️ 治疗参数控制面板</h3></div>
+                        <div id="treatmentFormPanel" class="treatment-form-container"></div>
+                    </div>
+                    <div class="chart-card" style="grid-column: span 2;">
+                        <div class="chart-header"><h3>Probit S型剂量-死亡率曲线（95%CI）</h3></div>
+                        <div id="probitCurveChart" class="chart-container tall"></div>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>虫卵死亡率热力图</h3></div>
+                        <div id="mortalityHeatmapEgg" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>幼虫死亡率热力图</h3></div>
+                        <div id="mortalityHeatmapLarva" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>成虫死亡率热力图</h3></div>
+                        <div id="mortalityHeatmapAdult" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>真菌孢子致死热力图</h3></div>
+                        <div id="mortalityHeatmapFungi" class="chart-container"></div>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>织绣历史治疗甘特图</h3></div>
+                        <div id="treatmentTimelineChart" class="chart-container tall"></div>
+                    </div>
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>不同暴露参数下纤维损失与色差</h3></div>
+                        <div id="fiberDamageChart" class="chart-container tall"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-vulnerability-board" class="view">
+                <div class="view-toolbar">
+                    <div class="toolbar-left">
+                        <h2 style="margin:0;">📊 TOPSIS脆弱性综合看板</h2>
+                        <p style="margin:0;color:var(--text-muted);font-size:13px;">基于TOPSIS法的100件织绣品6维度脆弱性综合评估与排序</p>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-primary" onclick="initVulnerabilityBoardView()">🔄 重新评估</button>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>脆弱性3D散点图（X虫蛀/Y霉变/Z强度）</h3></div>
+                        <div id="topsisScatter3dChart" class="chart-container tall"></div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3>Top5织绣6指标雷达对比</h3></div>
+                        <div id="radarComparisonChart" class="chart-container"></div>
+                    </div>
+                </div>
+                <div class="charts-row">
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>5级优先级统计分布</h3></div>
+                        <div id="actionPriorityBarChart" class="chart-container"></div>
+                    </div>
+                    <div class="chart-card wide">
+                        <div class="chart-header"><h3>预计保存年数对比（处理前后）</h3></div>
+                        <div id="preservationYearsGauge" class="chart-container"></div>
+                    </div>
+                </div>
+                <div class="section-card">
+                    <div class="section-header">
+                        <h3>🏆 TOPSIS脆弱性排名表（CC值降序）</h3>
+                    </div>
+                    <div class="risk-table-wrap">
+                        <div id="topsisRankingTable"></div>
+                    </div>
+                </div>
+            </section>
         </main>
     </div>
 
@@ -450,6 +643,10 @@
     <script src="js/components/MildewOverlay.js"></script>
     <script src="js/mildew_canvas.js"></script>
     <script src="js/echarts_overlay.js"></script>
+    <script src="js/pest_classification_view.js"></script>
+    <script src="js/voc_monitoring_view.js"></script>
+    <script src="js/nitrogen_treatment_view.js"></script>
+    <script src="js/vulnerability_board_view.js"></script>
     <script src="js/app.js?v=20250103"></script>
 </body>
 </html>

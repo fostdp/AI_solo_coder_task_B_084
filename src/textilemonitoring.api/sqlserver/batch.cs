@@ -2,11 +2,14 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using TextileMonitoring.API.Data;
 using TextileMonitoring.API.DTOs;
 using TextileMonitoring.API.Models;
+using TextileMonitoring.Data;
+using TextileMonitoring.Data.Entities;
 
 namespace TextileMonitoring.API.SqlServer
 {
@@ -15,17 +18,30 @@ namespace TextileMonitoring.API.SqlServer
         Task<int> BulkInsertDustSensorDataAsync(List<DustSensorData> dataList, CancellationToken ct = default);
         Task<int> BulkInsertFungiSensorDataAsync(List<FungiSensorData> dataList, CancellationToken ct = default);
         Task<int> BatchInsertHoleMarkersAsync(List<HoleMarker> markers, CancellationToken ct = default);
+        Task<int> BulkInsertFrassImageCapturesAsync(List<FrassImageCapture> dataList, CancellationToken ct = default);
+        Task<int> BulkInsertPestClassificationsAsync(List<PestClassificationRecord> dataList, CancellationToken ct = default);
+        Task<int> BulkInsertVocSensorDataAsync(List<VocSensorData> dataList, CancellationToken ct = default);
+        Task<int> BulkInsertVocClassificationsAsync(List<VocClassificationRecord> dataList, CancellationToken ct = default);
+        Task<int> BulkInsertTreatmentsAsync(List<NitrogenTreatmentSession> dataList, CancellationToken ct = default);
+        Task<int> BulkInsertFiberStrengthTestsAsync(List<FiberStrengthTest> dataList, CancellationToken ct = default);
+        Task<int> BulkInsertVulnerabilitiesAsync(List<VulnerabilityAssessment> dataList, CancellationToken ct = default);
     }
 
     public class SqlServerBatchWriter : ISqlServerBatchWriter
     {
         private readonly ApplicationDbContext _context;
+        private readonly TextileMonitoringDbContext _textileContext;
         private readonly ILogger<SqlServerBatchWriter> _logger;
         private readonly string _connectionString;
 
-        public SqlServerBatchWriter(ApplicationDbContext context, ILogger<SqlServerBatchWriter> logger, IConfiguration configuration)
+        public SqlServerBatchWriter(
+            ApplicationDbContext context,
+            TextileMonitoringDbContext textileContext,
+            ILogger<SqlServerBatchWriter> logger,
+            IConfiguration configuration)
         {
             _context = context;
+            _textileContext = textileContext;
             _logger = logger;
             _connectionString = configuration.GetConnectionString("DefaultConnection")!;
         }
@@ -210,6 +226,482 @@ VALUES " + string.Join(", ", queryParts) + ";";
             }
 
             _logger.LogInformation("HoleMarkers批量插入完成，共 {Count} 条", totalInserted);
+            return totalInserted;
+        }
+
+        public async Task<int> BulkInsertFrassImageCapturesAsync(List<FrassImageCapture> dataList, CancellationToken ct = default)
+        {
+            if (dataList == null || dataList.Count == 0) return 0;
+
+            int totalInserted = 0;
+
+            if (dataList.Count < 500)
+            {
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = false;
+                _textileContext.FrassImageCaptures.AddRange(dataList);
+                totalInserted = await _textileContext.SaveChangesAsync(ct);
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                _logger.LogInformation("EF Core批量写入FrassImageCapture: {Count} 条", totalInserted);
+                return totalInserted;
+            }
+
+            const int chunkSize = 3000;
+            for (int chunkIdx = 0; chunkIdx < dataList.Count; chunkIdx += chunkSize)
+            {
+                var chunk = dataList.GetRange(chunkIdx, Math.Min(chunkSize, dataList.Count - chunkIdx));
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(ct);
+
+                using var bulkCopy = new SqlBulkCopy(connection)
+                {
+                    DestinationTableName = "[dbo].[FrassImageCaptures]",
+                    BatchSize = chunk.Count,
+                    BulkCopyTimeout = 120,
+                    EnableStreaming = true
+                };
+
+                var columnMappings = new Dictionary<string, string>
+                {
+                    ["TextileId"] = "TextileId",
+                    ["SensorId"] = "SensorId",
+                    ["CorrelationId"] = "CorrelationId",
+                    ["CaptureTime"] = "CaptureTime",
+                    ["ImageWidth"] = "ImageWidth",
+                    ["ImageHeight"] = "ImageHeight",
+                    ["PixelDepth"] = "PixelDepth",
+                    ["Magnification"] = "Magnification",
+                    ["AverageParticleArea"] = "AverageParticleArea",
+                    ["ParticleCount"] = "ParticleCount",
+                    ["MeanGrayscale"] = "MeanGrayscale",
+                    ["TextureEntropy"] = "TextureEntropy",
+                    ["EllipticityMean"] = "EllipticityMean",
+                    ["AspectRatioMean"] = "AspectRatioMean",
+                    ["SolidityMean"] = "SolidityMean",
+                    ["FrassDensityCorrelated"] = "FrassDensityCorrelated",
+                    ["Temperature"] = "Temperature",
+                    ["Humidity"] = "Humidity",
+                    ["CreatedAt"] = "CreatedAt"
+                };
+
+                foreach (var map in columnMappings)
+                    bulkCopy.ColumnMappings.Add(map.Key, map.Value);
+
+                using var reader = new EntityListDataReader<FrassImageCapture>(chunk, columnMappings.Keys.ToList());
+                await bulkCopy.WriteToServerAsync(reader, ct);
+                totalInserted += chunk.Count;
+            }
+
+            _logger.LogInformation("SqlBulkCopy共写入FrassImageCapture: {Count} 条", totalInserted);
+            return totalInserted;
+        }
+
+        public async Task<int> BulkInsertPestClassificationsAsync(List<PestClassificationRecord> dataList, CancellationToken ct = default)
+        {
+            if (dataList == null || dataList.Count == 0) return 0;
+
+            int totalInserted = 0;
+
+            if (dataList.Count < 500)
+            {
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = false;
+                _textileContext.PestClassificationRecords.AddRange(dataList);
+                totalInserted = await _textileContext.SaveChangesAsync(ct);
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                _logger.LogInformation("EF Core批量写入PestClassificationRecord: {Count} 条", totalInserted);
+                return totalInserted;
+            }
+
+            const int chunkSize = 3000;
+            for (int chunkIdx = 0; chunkIdx < dataList.Count; chunkIdx += chunkSize)
+            {
+                var chunk = dataList.GetRange(chunkIdx, Math.Min(chunkSize, dataList.Count - chunkIdx));
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(ct);
+
+                using var bulkCopy = new SqlBulkCopy(connection)
+                {
+                    DestinationTableName = "[dbo].[PestClassificationRecords]",
+                    BatchSize = chunk.Count,
+                    BulkCopyTimeout = 120,
+                    EnableStreaming = true
+                };
+
+                var columnMappings = new Dictionary<string, string>
+                {
+                    ["TextileId"] = "TextileId",
+                    ["SensorId"] = "SensorId",
+                    ["SourceImageId"] = "SourceImageId",
+                    ["CorrelationId"] = "CorrelationId",
+                    ["SourceImageCorrelationId"] = "SourceImageCorrelationId",
+                    ["ClassifiedAt"] = "ClassifiedAt",
+                    ["PredictedSpeciesId"] = "PredictedSpeciesId",
+                    ["PredictedSpeciesName"] = "PredictedSpeciesName",
+                    ["Confidence"] = "Confidence",
+                    ["ProbabilitiesJson"] = "ProbabilitiesJson",
+                    ["ModelVersion"] = "ModelVersion",
+                    ["InferenceLatencyMs"] = "InferenceLatencyMs",
+                    ["PredictedInstars"] = "PredictedInstars",
+                    ["EstimatedPopulationSize"] = "EstimatedPopulationSize",
+                    ["RiskSeverityScore"] = "RiskSeverityScore",
+                    ["RecommendedAction"] = "RecommendedAction",
+                    ["CreatedAt"] = "CreatedAt"
+                };
+
+                foreach (var map in columnMappings)
+                    bulkCopy.ColumnMappings.Add(map.Key, map.Value);
+
+                using var reader = new EntityListDataReader<PestClassificationRecord>(chunk, columnMappings.Keys.ToList());
+                await bulkCopy.WriteToServerAsync(reader, ct);
+                totalInserted += chunk.Count;
+            }
+
+            _logger.LogInformation("SqlBulkCopy共写入PestClassificationRecord: {Count} 条", totalInserted);
+            return totalInserted;
+        }
+
+        public async Task<int> BulkInsertVocSensorDataAsync(List<VocSensorData> dataList, CancellationToken ct = default)
+        {
+            if (dataList == null || dataList.Count == 0) return 0;
+
+            int totalInserted = 0;
+
+            if (dataList.Count < 500)
+            {
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = false;
+                _textileContext.VocSensorData.AddRange(dataList);
+                totalInserted = await _textileContext.SaveChangesAsync(ct);
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                _logger.LogInformation("EF Core批量写入VocSensorData: {Count} 条", totalInserted);
+                return totalInserted;
+            }
+
+            const int chunkSize = 3000;
+            for (int chunkIdx = 0; chunkIdx < dataList.Count; chunkIdx += chunkSize)
+            {
+                var chunk = dataList.GetRange(chunkIdx, Math.Min(chunkSize, dataList.Count - chunkIdx));
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(ct);
+
+                using var bulkCopy = new SqlBulkCopy(connection)
+                {
+                    DestinationTableName = "[dbo].[VocSensorData]",
+                    BatchSize = chunk.Count,
+                    BulkCopyTimeout = 120,
+                    EnableStreaming = true
+                };
+
+                var columnMappings = new Dictionary<string, string>
+                {
+                    ["SensorId"] = "SensorId",
+                    ["TextileId"] = "TextileId",
+                    ["CorrelationId"] = "CorrelationId",
+                    ["ReadingTime"] = "ReadingTime",
+                    ["ToluenePPB"] = "ToluenePPB",
+                    ["XylenePPB"] = "XylenePPB",
+                    ["EthylbenzenePPB"] = "EthylbenzenePPB",
+                    ["FormaldehydePPB"] = "FormaldehydePPB",
+                    ["AcetaldehydePPB"] = "AcetaldehydePPB",
+                    ["_1Octen3OlPPB"] = "_1Octen3OlPPB",
+                    ["GeosminPPT"] = "GeosminPPT",
+                    ["_2MethylisoborneolPPT"] = "_2MethylisoborneolPPT",
+                    ["TotalVolatilePPB"] = "TotalVolatilePPB",
+                    ["AirflowMetered"] = "AirflowMetered",
+                    ["Temperature"] = "Temperature",
+                    ["Humidity"] = "Humidity",
+                    ["ZigBeeSignalStrength"] = "ZigBeeSignalStrength",
+                    ["SensorStatus"] = "SensorStatus",
+                    ["CreatedAt"] = "CreatedAt"
+                };
+
+                foreach (var map in columnMappings)
+                    bulkCopy.ColumnMappings.Add(map.Key, map.Value);
+
+                using var reader = new EntityListDataReader<VocSensorData>(chunk, columnMappings.Keys.ToList());
+                await bulkCopy.WriteToServerAsync(reader, ct);
+                totalInserted += chunk.Count;
+            }
+
+            _logger.LogInformation("SqlBulkCopy共写入VocSensorData: {Count} 条", totalInserted);
+            return totalInserted;
+        }
+
+        public async Task<int> BulkInsertVocClassificationsAsync(List<VocClassificationRecord> dataList, CancellationToken ct = default)
+        {
+            if (dataList == null || dataList.Count == 0) return 0;
+
+            int totalInserted = 0;
+
+            if (dataList.Count < 500)
+            {
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = false;
+                _textileContext.VocClassificationRecords.AddRange(dataList);
+                totalInserted = await _textileContext.SaveChangesAsync(ct);
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                _logger.LogInformation("EF Core批量写入VocClassificationRecord: {Count} 条", totalInserted);
+                return totalInserted;
+            }
+
+            const int chunkSize = 3000;
+            for (int chunkIdx = 0; chunkIdx < dataList.Count; chunkIdx += chunkSize)
+            {
+                var chunk = dataList.GetRange(chunkIdx, Math.Min(chunkSize, dataList.Count - chunkIdx));
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(ct);
+
+                using var bulkCopy = new SqlBulkCopy(connection)
+                {
+                    DestinationTableName = "[dbo].[VocClassificationRecords]",
+                    BatchSize = chunk.Count,
+                    BulkCopyTimeout = 120,
+                    EnableStreaming = true
+                };
+
+                var columnMappings = new Dictionary<string, string>
+                {
+                    ["TextileId"] = "TextileId",
+                    ["SensorId"] = "SensorId",
+                    ["SourceVocDataId"] = "SourceVocDataId",
+                    ["CorrelationId"] = "CorrelationId",
+                    ["SourceSensorCorrelationId"] = "SourceSensorCorrelationId",
+                    ["ClassifiedAt"] = "ClassifiedAt",
+                    ["PredictedMoldSpeciesId"] = "PredictedMoldSpeciesId",
+                    ["PredictedMoldSpeciesName"] = "PredictedMoldSpeciesName",
+                    ["Confidence"] = "Confidence",
+                    ["ProbabilitiesJson"] = "ProbabilitiesJson",
+                    ["ModelVersion"] = "ModelVersion",
+                    ["EstimatedBiomassMg"] = "EstimatedBiomassMg",
+                    ["EstimatedGrowthStageDays"] = "EstimatedGrowthStageDays",
+                    ["MycotoxinRiskIndex"] = "MycotoxinRiskIndex",
+                    ["EarlyWarningSeverity"] = "EarlyWarningSeverity",
+                    ["PredictedIncubationHours"] = "PredictedIncubationHours",
+                    ["CreatedAt"] = "CreatedAt"
+                };
+
+                foreach (var map in columnMappings)
+                    bulkCopy.ColumnMappings.Add(map.Key, map.Value);
+
+                using var reader = new EntityListDataReader<VocClassificationRecord>(chunk, columnMappings.Keys.ToList());
+                await bulkCopy.WriteToServerAsync(reader, ct);
+                totalInserted += chunk.Count;
+            }
+
+            _logger.LogInformation("SqlBulkCopy共写入VocClassificationRecord: {Count} 条", totalInserted);
+            return totalInserted;
+        }
+
+        public async Task<int> BulkInsertTreatmentsAsync(List<NitrogenTreatmentSession> dataList, CancellationToken ct = default)
+        {
+            if (dataList == null || dataList.Count == 0) return 0;
+
+            int totalInserted = 0;
+
+            if (dataList.Count < 500)
+            {
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = false;
+                _textileContext.NitrogenTreatmentSessions.AddRange(dataList);
+                totalInserted = await _textileContext.SaveChangesAsync(ct);
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                _logger.LogInformation("EF Core批量写入NitrogenTreatmentSession: {Count} 条", totalInserted);
+                return totalInserted;
+            }
+
+            const int chunkSize = 3000;
+            for (int chunkIdx = 0; chunkIdx < dataList.Count; chunkIdx += chunkSize)
+            {
+                var chunk = dataList.GetRange(chunkIdx, Math.Min(chunkSize, dataList.Count - chunkIdx));
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(ct);
+
+                using var bulkCopy = new SqlBulkCopy(connection)
+                {
+                    DestinationTableName = "[dbo].[NitrogenTreatmentSessions]",
+                    BatchSize = chunk.Count,
+                    BulkCopyTimeout = 120,
+                    EnableStreaming = true
+                };
+
+                var columnMappings = new Dictionary<string, string>
+                {
+                    ["TextileId"] = "TextileId",
+                    ["CorrelationId"] = "CorrelationId",
+                    ["RequestCorrelationId"] = "RequestCorrelationId",
+                    ["RequestedBy"] = "RequestedBy",
+                    ["TargetOrganismsId"] = "TargetOrganismsId",
+                    ["TargetOxygenConcentrationPct"] = "TargetOxygenConcentrationPct",
+                    ["NitrogenFlowRateLpm"] = "NitrogenFlowRateLpm",
+                    ["ExposureDurationMinutes"] = "ExposureDurationMinutes",
+                    ["ChamberPressureKpa"] = "ChamberPressureKpa",
+                    ["ChamberTemperatureC"] = "ChamberTemperatureC",
+                    ["ChamberHumidityPct"] = "ChamberHumidityPct",
+                    ["CurrentPestDensity"] = "CurrentPestDensity",
+                    ["CurrentFungiCFU"] = "CurrentFungiCFU",
+                    ["PrimaryPestTargetId"] = "PrimaryPestTargetId",
+                    ["PredictedEggMortalityRate"] = "PredictedEggMortalityRate",
+                    ["PredictedLarvaeMortalityRate"] = "PredictedLarvaeMortalityRate",
+                    ["PredictedAdultMortalityRate"] = "PredictedAdultMortalityRate",
+                    ["PredictedFungiSterilityRate"] = "PredictedFungiSterilityRate",
+                    ["CILowPct"] = "CILowPct",
+                    ["CIHighPct"] = "CIHighPct",
+                    ["ProbitTransformValue"] = "ProbitTransformValue",
+                    ["LD99Minutes"] = "LD99Minutes",
+                    ["MinimumRequiredExposureMin"] = "MinimumRequiredExposureMin",
+                    ["RecommendedSafetyExposureMin"] = "RecommendedSafetyExposureMin",
+                    ["FiberStrengthDegradationPct"] = "FiberStrengthDegradationPct",
+                    ["ColorChangeDeltaE"] = "ColorChangeDeltaE",
+                    ["SessionStatus"] = "SessionStatus",
+                    ["IsSuccessCriteriaMet"] = "IsSuccessCriteriaMet",
+                    ["CreatedAt"] = "CreatedAt",
+                    ["StartedAt"] = "StartedAt",
+                    ["CompletedAt"] = "CompletedAt",
+                    ["Notes"] = "Notes"
+                };
+
+                foreach (var map in columnMappings)
+                    bulkCopy.ColumnMappings.Add(map.Key, map.Value);
+
+                using var reader = new EntityListDataReader<NitrogenTreatmentSession>(chunk, columnMappings.Keys.ToList());
+                await bulkCopy.WriteToServerAsync(reader, ct);
+                totalInserted += chunk.Count;
+            }
+
+            _logger.LogInformation("SqlBulkCopy共写入NitrogenTreatmentSession: {Count} 条", totalInserted);
+            return totalInserted;
+        }
+
+        public async Task<int> BulkInsertFiberStrengthTestsAsync(List<FiberStrengthTest> dataList, CancellationToken ct = default)
+        {
+            if (dataList == null || dataList.Count == 0) return 0;
+
+            int totalInserted = 0;
+
+            if (dataList.Count < 500)
+            {
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = false;
+                _textileContext.FiberStrengthTests.AddRange(dataList);
+                totalInserted = await _textileContext.SaveChangesAsync(ct);
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                _logger.LogInformation("EF Core批量写入FiberStrengthTest: {Count} 条", totalInserted);
+                return totalInserted;
+            }
+
+            const int chunkSize = 3000;
+            for (int chunkIdx = 0; chunkIdx < dataList.Count; chunkIdx += chunkSize)
+            {
+                var chunk = dataList.GetRange(chunkIdx, Math.Min(chunkSize, dataList.Count - chunkIdx));
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(ct);
+
+                using var bulkCopy = new SqlBulkCopy(connection)
+                {
+                    DestinationTableName = "[dbo].[FiberStrengthTests]",
+                    BatchSize = chunk.Count,
+                    BulkCopyTimeout = 120,
+                    EnableStreaming = true
+                };
+
+                var columnMappings = new Dictionary<string, string>
+                {
+                    ["TextileId"] = "TextileId",
+                    ["TestDate"] = "TestDate",
+                    ["OriginalBreakingLoadN"] = "OriginalBreakingLoadN",
+                    ["CurrentBreakingLoadN"] = "CurrentBreakingLoadN",
+                    ["TensileStrengthRemainingPct"] = "TensileStrengthRemainingPct",
+                    ["ElongationAtBreakPct"] = "ElongationAtBreakPct",
+                    ["YoungModulusGpa"] = "YoungModulusGpa",
+                    ["TestStandard"] = "TestStandard",
+                    ["SampleCount"] = "SampleCount",
+                    ["SampleStandardDeviation"] = "SampleStandardDeviation",
+                    ["CoefficientOfVariationPct"] = "CoefficientOfVariationPct",
+                    ["OperatorName"] = "OperatorName",
+                    ["Notes"] = "Notes",
+                    ["CreatedAt"] = "CreatedAt"
+                };
+
+                foreach (var map in columnMappings)
+                    bulkCopy.ColumnMappings.Add(map.Key, map.Value);
+
+                using var reader = new EntityListDataReader<FiberStrengthTest>(chunk, columnMappings.Keys.ToList());
+                await bulkCopy.WriteToServerAsync(reader, ct);
+                totalInserted += chunk.Count;
+            }
+
+            _logger.LogInformation("SqlBulkCopy共写入FiberStrengthTest: {Count} 条", totalInserted);
+            return totalInserted;
+        }
+
+        public async Task<int> BulkInsertVulnerabilitiesAsync(List<VulnerabilityAssessment> dataList, CancellationToken ct = default)
+        {
+            if (dataList == null || dataList.Count == 0) return 0;
+
+            int totalInserted = 0;
+
+            if (dataList.Count < 500)
+            {
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = false;
+                _textileContext.VulnerabilityAssessments.AddRange(dataList);
+                totalInserted = await _textileContext.SaveChangesAsync(ct);
+                _textileContext.ChangeTracker.AutoDetectChangesEnabled = true;
+                _logger.LogInformation("EF Core批量写入VulnerabilityAssessment: {Count} 条", totalInserted);
+                return totalInserted;
+            }
+
+            const int chunkSize = 3000;
+            for (int chunkIdx = 0; chunkIdx < dataList.Count; chunkIdx += chunkSize)
+            {
+                var chunk = dataList.GetRange(chunkIdx, Math.Min(chunkSize, dataList.Count - chunkIdx));
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(ct);
+
+                using var bulkCopy = new SqlBulkCopy(connection)
+                {
+                    DestinationTableName = "[dbo].[VulnerabilityAssessments]",
+                    BatchSize = chunk.Count,
+                    BulkCopyTimeout = 120,
+                    EnableStreaming = true
+                };
+
+                var columnMappings = new Dictionary<string, string>
+                {
+                    ["TextileId"] = "TextileId",
+                    ["CorrelationId"] = "CorrelationId",
+                    ["AssessmentDate"] = "AssessmentDate",
+                    ["TopsisScore"] = "TopsisScore",
+                    ["TopsisRank"] = "TopsisRank",
+                    ["TopsisTotalCount"] = "TopsisTotalCount",
+                    ["PriorityId"] = "PriorityId",
+                    ["PriorityName"] = "PriorityName",
+                    ["CriteriaJson"] = "CriteriaJson",
+                    ["CompositePestDamageScore"] = "CompositePestDamageScore",
+                    ["CompositeMoldAreaScore"] = "CompositeMoldAreaScore",
+                    ["FiberTensileStrengthRemainingPct"] = "FiberTensileStrengthRemainingPct",
+                    ["DynastyScarcityValueScore"] = "DynastyScarcityValueScore",
+                    ["HistoricalSignificanceScore"] = "HistoricalSignificanceScore",
+                    ["RestorationCostEstimateCny"] = "RestorationCostEstimateCny",
+                    ["RelativeClosenessCC"] = "RelativeClosenessCC",
+                    ["ConsistencyRatioCR"] = "ConsistencyRatioCR",
+                    ["TreatmentCostBenefitRatio"] = "TreatmentCostBenefitRatio",
+                    ["ProjectedYearsIfNoAction"] = "ProjectedYearsIfNoAction",
+                    ["ProjectedYearsWithAction"] = "ProjectedYearsWithAction",
+                    ["ActionRecommendation"] = "ActionRecommendation",
+                    ["CreatedAt"] = "CreatedAt"
+                };
+
+                foreach (var map in columnMappings)
+                    bulkCopy.ColumnMappings.Add(map.Key, map.Value);
+
+                using var reader = new EntityListDataReader<VulnerabilityAssessment>(chunk, columnMappings.Keys.ToList());
+                await bulkCopy.WriteToServerAsync(reader, ct);
+                totalInserted += chunk.Count;
+            }
+
+            _logger.LogInformation("SqlBulkCopy共写入VulnerabilityAssessment: {Count} 条", totalInserted);
             return totalInserted;
         }
     }
