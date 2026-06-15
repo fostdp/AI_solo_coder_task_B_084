@@ -24,7 +24,7 @@ public class DatabaseConfig
 
 public class CnnClassifierConfig
 {
-    public string ModelVersion { get; set; } = "cnn-frass-v1.0";
+    public string ModelVersion { get; set; } = "cnn-frass-v2.0";
     public int MinInferenceLatencyMs { get; set; } = 45;
     public int MaxInferenceLatencyMs { get; set; } = 95;
     public double TemperatureScale { get; set; } = 1.0;
@@ -32,4 +32,14 @@ public class CnnClassifierConfig
     public int MinInstars { get; set; } = 1;
     public int MaxInstars { get; set; } = 5;
     public double BasePopulationPerParticle { get; set; } = 0.25;
+
+    public bool EnableDataAugmentation { get; set; } = true;
+    public double AugmentationNoiseStdDev { get; set; } = 0.06;
+    public double FeatureJitterRange { get; set; } = 0.08;
+    public double DropoutRate { get; set; } = 0.15;
+    public int TtaAugmentationCount { get; set; } = 8;
+
+    public bool EnableTransferLearning { get; set; } = true;
+    public double FineTuneFactor { get; set; } = 0.65;
+    public double BaseModelWeight { get; set; } = 0.35;
 }

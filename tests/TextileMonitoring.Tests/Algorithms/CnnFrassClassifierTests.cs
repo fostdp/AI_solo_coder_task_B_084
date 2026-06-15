@@ -354,4 +354,140 @@ public class CnnFrassClassifierTests
         Assert.True(margin < 0.5 || result.Confidence < 0.7,
             $"Ambiguous features should have low confidence or small margin (margin={margin:F3}, conf={result.Confidence:F3})");
     }
+
+    [Fact]
+    public void DataAugmentation_TtaImprovesRobustness()
+    {
+        var baseImage = new FrassImageCaptured
+        {
+            TextileId = 6000,
+            SensorCode = "IMG-TTA",
+            EllipticityMean = 0.82,
+            AspectRatioMean = 1.55,
+            SolidityMean = 0.91,
+            MeanGrayscale = 132.6,
+            TextureEntropy = 4.8,
+            AverageParticleArea = 120.0,
+            ParticleCount = 30
+        };
+
+        var predictions = new List<PestSpecies>();
+        for (int i = 0; i < 10; i++)
+        {
+            var (result, _) = _service.Classify(baseImage);
+            predictions.Add(result.PredictedSpecies);
+        }
+
+        var speciesCounts = predictions.GroupBy(p => p).ToDictionary(g => g.Key, g => g.Count());
+        var mostCommon = speciesCounts.OrderByDescending(kv => kv.Value).First();
+
+        Assert.True(mostCommon.Value >= 6,
+            $"TTA should provide stable predictions; top species {mostCommon.Key} appears {mostCommon.Value}/10 times");
+    }
+
+    [Fact]
+    public void TransferLearning_FineTuneFactor_ProfilesInterpolated()
+    {
+        var configNoTl = new CnnClassifierConfig
+        {
+            ModelVersion = "test-notl",
+            MinInferenceLatencyMs = 1,
+            MaxInferenceLatencyMs = 2,
+            EnableTransferLearning = false,
+            EnableDataAugmentation = false,
+            TtaAugmentationCount = 1,
+            TemperatureScale = 1.0,
+            NoiseLevel = 0.0
+        };
+
+        var configTl = new CnnClassifierConfig
+        {
+            ModelVersion = "test-tl",
+            MinInferenceLatencyMs = 1,
+            MaxInferenceLatencyMs = 2,
+            EnableTransferLearning = true,
+            FineTuneFactor = 0.65,
+            EnableDataAugmentation = false,
+            TtaAugmentationCount = 1,
+            TemperatureScale = 1.0,
+            NoiseLevel = 0.0
+        };
+
+        var serviceNoTl = new CnnFrassClassifierService(
+            Microsoft.Extensions.Options.Options.Create(configNoTl));
+        var serviceTl = new CnnFrassClassifierService(
+            Microsoft.Extensions.Options.Options.Create(configTl));
+
+        var image = new FrassImageCaptured
+        {
+            TextileId = 6001,
+            SensorCode = "IMG-TL",
+            EllipticityMean = 0.7,
+            AspectRatioMean = 1.8,
+            SolidityMean = 0.8,
+            MeanGrayscale = 130,
+            TextureEntropy = 5.5,
+            AverageParticleArea = 150.0,
+            ParticleCount = 20
+        };
+
+        var (resultNoTl, _) = serviceNoTl.Classify(image);
+        var (resultTl, _) = serviceTl.Classify(image);
+
+        Assert.NotNull(resultNoTl);
+        Assert.NotNull(resultTl);
+        Assert.True(resultNoTl.Confidence > 0);
+        Assert.True(resultTl.Confidence > 0);
+    }
+
+    [Fact]
+    public void DropoutRegularization_ActiveDuringAugmentation()
+    {
+        var config = new CnnClassifierConfig
+        {
+            ModelVersion = "test-dropout",
+            MinInferenceLatencyMs = 1,
+            MaxInferenceLatencyMs = 2,
+            EnableDataAugmentation = true,
+            TtaAugmentationCount = 16,
+            DropoutRate = 0.3,
+            AugmentationNoiseStdDev = 0.05,
+            FeatureJitterRange = 0.06,
+            TemperatureScale = 1.0,
+            NoiseLevel = 0.0,
+            EnableTransferLearning = false
+        };
+
+        var service = new CnnFrassClassifierService(
+            Microsoft.Extensions.Options.Options.Create(config));
+
+        var image = new FrassImageCaptured
+        {
+            TextileId = 6002,
+            SensorCode = "IMG-DROPOUT",
+            EllipticityMean = 0.75,
+            AspectRatioMean = 1.6,
+            SolidityMean = 0.85,
+            MeanGrayscale = 128,
+            TextureEntropy = 5.0,
+            AverageParticleArea = 100.0,
+            ParticleCount = 25
+        };
+
+        var confidences = new List<double>();
+        for (int i = 0; i < 8; i++)
+        {
+            var (result, _) = service.Classify(image);
+            confidences.Add(result.Confidence);
+        }
+
+        var maxConf = confidences.Max();
+        var minConf = confidences.Min();
+        var variance = confidences.Average(c => Math.Pow(c - confidences.Average(), 2));
+
+        Assert.True(variance > 0.0001,
+            $"Dropout and augmentation should introduce confidence variance (var={variance:F6})");
+        Assert.True(maxConf - minConf > 0.005,
+            $"Confidence should vary across runs with dropout (range={maxConf - minConf:F4})");
+    }
 }

@@ -109,20 +109,167 @@ public class CnnFrassClassifierService
         }
     };
 
+    private static readonly Dictionary<PestSpecies, PestFeatureProfile> BaseModelProfiles = new()
+    {
+        {
+            PestSpecies.LepismaSaccharina,
+            new PestFeatureProfile
+            {
+                Species = PestSpecies.LepismaSaccharina,
+                EllipticityIdeal = 0.75,
+                EllipticityWeight = 0.18,
+                AspectRatioIdeal = 1.70,
+                AspectRatioWeight = 0.14,
+                SolidityIdeal = 0.85,
+                SolidityWeight = 0.18,
+                MeanGrayscaleIdeal = 0.50,
+                MeanGrayscaleWeight = 0.16,
+                TextureEntropyIdeal = 5.2,
+                TextureEntropyWeight = 0.16,
+                AverageParticleAreaIdeal = 110.0,
+                AverageParticleAreaWeight = 0.18
+            }
+        },
+        {
+            PestSpecies.CtenolepismaLongicaudata,
+            new PestFeatureProfile
+            {
+                Species = PestSpecies.CtenolepismaLongicaudata,
+                EllipticityIdeal = 0.65,
+                EllipticityWeight = 0.15,
+                AspectRatioIdeal = 2.20,
+                AspectRatioWeight = 0.20,
+                SolidityIdeal = 0.68,
+                SolidityWeight = 0.18,
+                MeanGrayscaleIdeal = 0.45,
+                MeanGrayscaleWeight = 0.13,
+                TextureEntropyIdeal = 6.2,
+                TextureEntropyWeight = 0.20,
+                AverageParticleAreaIdeal = 90.0,
+                AverageParticleAreaWeight = 0.14
+            }
+        },
+        {
+            PestSpecies.AttagenusPellio,
+            new PestFeatureProfile
+            {
+                Species = PestSpecies.AttagenusPellio,
+                EllipticityIdeal = 0.48,
+                EllipticityWeight = 0.20,
+                AspectRatioIdeal = 1.30,
+                AspectRatioWeight = 0.10,
+                SolidityIdeal = 0.75,
+                SolidityWeight = 0.14,
+                MeanGrayscaleIdeal = 0.72,
+                MeanGrayscaleWeight = 0.20,
+                TextureEntropyIdeal = 5.5,
+                TextureEntropyWeight = 0.12,
+                AverageParticleAreaIdeal = 250.0,
+                AverageParticleAreaWeight = 0.24
+            }
+        },
+        {
+            PestSpecies.TineolaBisselliella,
+            new PestFeatureProfile
+            {
+                Species = PestSpecies.TineolaBisselliella,
+                EllipticityIdeal = 0.62,
+                EllipticityWeight = 0.16,
+                AspectRatioIdeal = 1.75,
+                AspectRatioWeight = 0.14,
+                SolidityIdeal = 0.60,
+                SolidityWeight = 0.20,
+                MeanGrayscaleIdeal = 0.42,
+                MeanGrayscaleWeight = 0.16,
+                TextureEntropyIdeal = 5.8,
+                TextureEntropyWeight = 0.14,
+                AverageParticleAreaIdeal = 60.0,
+                AverageParticleAreaWeight = 0.20
+            }
+        },
+        {
+            PestSpecies.AnthrenusVerbasci,
+            new PestFeatureProfile
+            {
+                Species = PestSpecies.AnthrenusVerbasci,
+                EllipticityIdeal = 0.90,
+                EllipticityWeight = 0.22,
+                AspectRatioIdeal = 1.15,
+                AspectRatioWeight = 0.18,
+                SolidityIdeal = 0.82,
+                SolidityWeight = 0.15,
+                MeanGrayscaleIdeal = 0.52,
+                MeanGrayscaleWeight = 0.18,
+                TextureEntropyIdeal = 5.3,
+                TextureEntropyWeight = 0.12,
+                AverageParticleAreaIdeal = 150.0,
+                AverageParticleAreaWeight = 0.15
+            }
+        }
+    };
+
+    private readonly Dictionary<PestSpecies, PestFeatureProfile> _fineTunedProfiles;
+
     public CnnFrassClassifierService(IOptions<CnnClassifierConfig> config)
     {
         _config = config.Value;
         _random = new Random(Guid.NewGuid().GetHashCode());
+        _fineTunedProfiles = BuildFineTunedProfiles();
     }
+
+    private Dictionary<PestSpecies, PestFeatureProfile> BuildFineTunedProfiles()
+    {
+        if (!_config.EnableTransferLearning)
+            return new Dictionary<PestSpecies, PestFeatureProfile>(SpeciesProfiles);
+
+        var result = new Dictionary<PestSpecies, PestFeatureProfile>();
+        var alpha = _config.FineTuneFactor;
+
+        foreach (var species in SpeciesProfiles.Keys)
+        {
+            var domain = SpeciesProfiles[species];
+            var baseline = BaseModelProfiles[species];
+
+            result[species] = new PestFeatureProfile
+            {
+                Species = species,
+                EllipticityIdeal = Lerp(baseline.EllipticityIdeal, domain.EllipticityIdeal, alpha),
+                EllipticityWeight = Lerp(baseline.EllipticityWeight, domain.EllipticityWeight, alpha),
+                AspectRatioIdeal = Lerp(baseline.AspectRatioIdeal, domain.AspectRatioIdeal, alpha),
+                AspectRatioWeight = Lerp(baseline.AspectRatioWeight, domain.AspectRatioWeight, alpha),
+                SolidityIdeal = Lerp(baseline.SolidityIdeal, domain.SolidityIdeal, alpha),
+                SolidityWeight = Lerp(baseline.SolidityWeight, domain.SolidityWeight, alpha),
+                MeanGrayscaleIdeal = Lerp(baseline.MeanGrayscaleIdeal, domain.MeanGrayscaleIdeal, alpha),
+                MeanGrayscaleWeight = Lerp(baseline.MeanGrayscaleWeight, domain.MeanGrayscaleWeight, alpha),
+                TextureEntropyIdeal = Lerp(baseline.TextureEntropyIdeal, domain.TextureEntropyIdeal, alpha),
+                TextureEntropyWeight = Lerp(baseline.TextureEntropyWeight, domain.TextureEntropyWeight, alpha),
+                AverageParticleAreaIdeal = Lerp(baseline.AverageParticleAreaIdeal, domain.AverageParticleAreaIdeal, alpha),
+                AverageParticleAreaWeight = Lerp(baseline.AverageParticleAreaWeight, domain.AverageParticleAreaWeight, alpha)
+            };
+        }
+
+        return result;
+    }
+
+    private static double Lerp(double a, double b, double t) => a + (b - a) * t;
 
     public virtual (PestClassificationResult Result, double InferenceLatencyMs) Classify(FrassImageCaptured image)
     {
         var latency = _random.Next(_config.MinInferenceLatencyMs, _config.MaxInferenceLatencyMs + 1);
         Thread.Sleep(latency);
 
-        var normalizedFeatures = NormalizeFeatures(image);
-        var distances = CalculateWeightedDistances(normalizedFeatures);
-        var probabilities = SoftmaxDistances(distances);
+        Dictionary<PestSpecies, double> probabilities;
+
+        if (_config.EnableDataAugmentation && _config.TtaAugmentationCount > 1)
+        {
+            probabilities = ClassifyWithTta(image);
+        }
+        else
+        {
+            var normalizedFeatures = NormalizeFeatures(image);
+            var distances = CalculateWeightedDistances(normalizedFeatures);
+            probabilities = SoftmaxDistances(distances);
+        }
 
         probabilities = ApplyDecisionTreeNoise(probabilities);
 
@@ -176,11 +323,69 @@ public class CnnFrassClassifierService
             AverageParticleArea: avgParticleArea);
     }
 
+    private Dictionary<PestSpecies, double> ClassifyWithTta(FrassImageCaptured image)
+    {
+        var aggregated = new Dictionary<PestSpecies, double>();
+        foreach (var species in _fineTunedProfiles.Keys)
+            aggregated[species] = 0.0;
+
+        var baseFeatures = NormalizeFeatures(image);
+
+        for (int i = 0; i < _config.TtaAugmentationCount; i++)
+        {
+            var augmented = AugmentFeatures(baseFeatures);
+            var distances = CalculateWeightedDistances(augmented);
+            var probs = SoftmaxDistances(distances);
+
+            foreach (var kvp in probs)
+                aggregated[kvp.Key] += kvp.Value;
+        }
+
+        var sum = aggregated.Values.Sum();
+        return aggregated.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum);
+    }
+
+    private NormalizedFeatureVector AugmentFeatures(NormalizedFeatureVector original)
+    {
+        double jitter = _config.FeatureJitterRange;
+        double noiseStd = _config.AugmentationNoiseStdDev;
+        double dropoutRate = _config.DropoutRate;
+
+        double GaussianNoise()
+        {
+            double u1 = 1.0 - _random.NextDouble();
+            double u2 = 1.0 - _random.NextDouble();
+            return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2) * noiseStd;
+        }
+
+        double Dropout(double value)
+        {
+            if (_random.NextDouble() < dropoutRate)
+                return 0.5;
+            return value;
+        }
+
+        double Jitter(double value)
+        {
+            var shift = (_random.NextDouble() - 0.5) * 2.0 * jitter;
+            return Math.Clamp(value + shift + GaussianNoise(), 0.0, 1.0);
+        }
+
+        return new NormalizedFeatureVector(
+            Ellipticity: Dropout(Jitter(original.Ellipticity)),
+            AspectRatio: Dropout(Jitter(original.AspectRatio)),
+            Solidity: Dropout(Jitter(original.Solidity)),
+            MeanGrayscale: Dropout(Jitter(original.MeanGrayscale)),
+            TextureEntropy: Dropout(Jitter(original.TextureEntropy)),
+            AverageParticleArea: Dropout(Jitter(original.AverageParticleArea)));
+    }
+
     private Dictionary<PestSpecies, double> CalculateWeightedDistances(NormalizedFeatureVector features)
     {
         var distances = new Dictionary<PestSpecies, double>();
+        var profiles = _config.EnableTransferLearning ? _fineTunedProfiles : SpeciesProfiles;
 
-        foreach (var profile in SpeciesProfiles.Values)
+        foreach (var profile in profiles.Values)
         {
             var normEllipticity = Math.Clamp((profile.EllipticityIdeal - 0.1) / 0.9, 0.0, 1.0);
             var normAspectRatio = Math.Clamp((profile.AspectRatioIdeal - 1.0) / 3.0, 0.0, 1.0);

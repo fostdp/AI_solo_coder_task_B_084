@@ -28,13 +28,20 @@ public class NitrogenProbitSimulator : INitrogenProbitSimulator
         var humidity = request.ChamberHumidityPct;
 
         var tempFactor = CalculateTempFactor(temp);
+        var pestTolerance = GetPestSpeciesTolerance(request.PrimaryPestTarget);
 
-        var eggMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, _config.Eggs);
-        var larvaeMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, _config.Larvae);
-        var adultMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, _config.Adult);
-        var fungiMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, _config.Fungi);
+        var eggParams = ApplyPestTolerance(_config.Eggs, pestTolerance, LifeStage.Eggs);
+        var larvaeParams = ApplyPestTolerance(_config.Larvae, pestTolerance, LifeStage.Larvae);
+        var adultParams = ApplyPestTolerance(_config.Adult, pestTolerance, LifeStage.Adult);
+        var fungiParams = _config.Fungi;
 
-        var avgYNormalized = CalculateAverageYNormalized(exposureMinutes, oxygenPct, flowRate, tempFactor);
+        var eggMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, eggParams);
+        var larvaeMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, larvaeParams);
+        var adultMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, adultParams);
+        var fungiMortality = CalculateMortality(exposureMinutes, oxygenPct, flowRate, tempFactor, fungiParams);
+
+        var avgYNormalized = CalculateAverageYNormalized(exposureMinutes, oxygenPct, flowRate, tempFactor,
+            new[] { eggParams, larvaeParams, adultParams, fungiParams });
         var probitValue = CalculateProbitValue(avgYNormalized);
 
         var se = _config.DeltaMethodBaseSE + _config.DeltaMethodExposureCoeff * exposureMinutes;
@@ -43,8 +50,11 @@ public class NitrogenProbitSimulator : INitrogenProbitSimulator
         var ciLow = Math.Max(0, avgMortality - ciHalfWidth) * 100;
         var ciHigh = Math.Min(100, avgMortality + ciHalfWidth) * 100;
 
-        var ld99Min = CalculateLD99Minutes(oxygenPct, flowRate, tempFactor);
-        var minRequiredExposure = CalculateMinRequiredExposure(request.TargetOrganisms, oxygenPct, flowRate, tempFactor);
+        var ld99Min = CalculateLD99Minutes(oxygenPct, flowRate, tempFactor,
+            new[] { eggParams, larvaeParams, adultParams, fungiParams });
+        var minRequiredExposure = CalculateMinRequiredExposure(
+            request.TargetOrganisms, oxygenPct, flowRate, tempFactor,
+            eggParams, larvaeParams, adultParams, fungiParams);
         var recommendedSafetyExposure = minRequiredExposure * _config.SafetyFactor;
 
         var exposureHours = exposureMinutes / 60.0;
@@ -90,6 +100,47 @@ public class NitrogenProbitSimulator : INitrogenProbitSimulator
         return 1.0 + 0.045 * delta - 0.0015 * delta * delta;
     }
 
+    private PestSpeciesTolerance GetPestSpeciesTolerance(PestSpecies? species)
+    {
+        if (!_config.EnablePestSpeciesCorrection || !species.HasValue)
+            return new PestSpeciesTolerance { LD50Multiplier = 1.0, BetaMultiplier = 1.0, DoseEfficiencyMultiplier = 1.0 };
+
+        var key = species.Value.ToString();
+        if (_config.PestTolerance.TryGetValue(key, out var tolerance))
+            return tolerance;
+
+        return new PestSpeciesTolerance { LD50Multiplier = 1.0, BetaMultiplier = 1.0, DoseEfficiencyMultiplier = 1.0 };
+    }
+
+    private enum LifeStage
+    {
+        Eggs,
+        Larvae,
+        Adult,
+        Fungi
+    }
+
+    private static ProbitStageParameters ApplyPestTolerance(
+        ProbitStageParameters baseParams,
+        PestSpeciesTolerance tolerance,
+        LifeStage stage)
+    {
+        if (stage == LifeStage.Fungi)
+            return baseParams;
+
+        return new ProbitStageParameters
+        {
+            K = new[]
+            {
+                baseParams.K[0] * tolerance.DoseEfficiencyMultiplier,
+                baseParams.K[1] * tolerance.DoseEfficiencyMultiplier,
+                baseParams.K[2] * tolerance.DoseEfficiencyMultiplier
+            },
+            LD50Minutes = baseParams.LD50Minutes * tolerance.LD50Multiplier,
+            Beta = baseParams.Beta * tolerance.BetaMultiplier
+        };
+    }
+
     private double CalculateDose(double exposureMinutes, double oxygenPct, double flowRate, double tempFactor, ProbitStageParameters stage)
     {
         var oxygenTerm = stage.K[0] * Math.Log(21.0 / oxygenPct);
@@ -106,9 +157,8 @@ public class NitrogenProbitSimulator : INitrogenProbitSimulator
         return Math.Clamp(mortality * 100.0, 0.0, 100.0);
     }
 
-    private double CalculateAverageYNormalized(double exposureMinutes, double oxygenPct, double flowRate, double tempFactor)
+    private double CalculateAverageYNormalized(double exposureMinutes, double oxygenPct, double flowRate, double tempFactor, ProbitStageParameters[] stages)
     {
-        var stages = new[] { _config.Eggs, _config.Larvae, _config.Adult, _config.Fungi };
         var totalY = 0.0;
         foreach (var stage in stages)
         {
@@ -144,9 +194,8 @@ public class NitrogenProbitSimulator : INitrogenProbitSimulator
         return targetDose / perMinuteDose;
     }
 
-    private double CalculateLD99Minutes(double oxygenPct, double flowRate, double tempFactor)
+    private double CalculateLD99Minutes(double oxygenPct, double flowRate, double tempFactor, ProbitStageParameters[] stages)
     {
-        var stages = new[] { _config.Eggs, _config.Larvae, _config.Adult, _config.Fungi };
         var maxLd99 = 0.0;
         foreach (var stage in stages)
         {
@@ -156,29 +205,37 @@ public class NitrogenProbitSimulator : INitrogenProbitSimulator
         return maxLd99;
     }
 
-    private double CalculateMinRequiredExposure(TreatmentTarget target, double oxygenPct, double flowRate, double tempFactor)
+    private double CalculateMinRequiredExposure(
+        TreatmentTarget target,
+        double oxygenPct,
+        double flowRate,
+        double tempFactor,
+        ProbitStageParameters eggParams,
+        ProbitStageParameters larvaeParams,
+        ProbitStageParameters adultParams,
+        ProbitStageParameters fungiParams)
     {
         var requiredStages = new List<ProbitStageParameters>();
 
         switch (target)
         {
             case TreatmentTarget.AllStages:
-                requiredStages.AddRange(new[] { _config.Eggs, _config.Larvae, _config.Adult, _config.Fungi });
+                requiredStages.AddRange(new[] { eggParams, larvaeParams, adultParams, fungiParams });
                 break;
             case TreatmentTarget.EggsOnly:
-                requiredStages.Add(_config.Eggs);
+                requiredStages.Add(eggParams);
                 break;
             case TreatmentTarget.LarvaeOnly:
-                requiredStages.Add(_config.Larvae);
+                requiredStages.Add(larvaeParams);
                 break;
             case TreatmentTarget.AdultOnly:
-                requiredStages.Add(_config.Adult);
+                requiredStages.Add(adultParams);
                 break;
             case TreatmentTarget.FungiSterilization:
-                requiredStages.Add(_config.Fungi);
+                requiredStages.Add(fungiParams);
                 break;
             default:
-                requiredStages.AddRange(new[] { _config.Eggs, _config.Larvae, _config.Adult, _config.Fungi });
+                requiredStages.AddRange(new[] { eggParams, larvaeParams, adultParams, fungiParams });
                 break;
         }
 

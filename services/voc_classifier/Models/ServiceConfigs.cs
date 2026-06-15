@@ -27,5 +27,12 @@ public class RandomForestConfig
     public int NumberOfTrees { get; set; } = 200;
     public int OobErrorMinBps { get; set; } = 65;
     public int OobErrorMaxBps { get; set; } = 180;
-    public string ModelVersion { get; set; } = "rf-voc-v1.0";
+    public string ModelVersion { get; set; } = "rf-voc-v2.0";
+
+    public bool EnableBaselineCalibration { get; set; } = true;
+    public int BaselineWindowSize { get; set; } = 30;
+    public double BaselineDriftThresholdPct { get; set; } = 0.15;
+    public double BaselineUpdateFactor { get; set; } = 0.05;
+    public double TemperatureCompensationCoeff { get; set; } = 0.008;
+    public int MinimumSamplesForBaseline { get; set; } = 10;
 }

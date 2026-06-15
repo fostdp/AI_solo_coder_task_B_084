@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using TextileMonitoring.Contracts.Messages;
 using VocClassifier.Service.Models;
@@ -18,6 +19,11 @@ public class VocClassificationOutput
     public int OobErrorRateBps { get; set; }
     public double FeatureImportanceGiniTop3 { get; set; }
     public double SynergisticPestFungiIndex { get; set; }
+
+    public bool BaselineCalibrated { get; set; }
+    public double BaselineDriftPct { get; set; }
+    public int BaselineSampleCount { get; set; }
+    public double[]? CurrentBaselineVector { get; set; }
 }
 
 public interface IRandomForestVocClassifier
@@ -29,6 +35,7 @@ public class RandomForestVocClassifier : IRandomForestVocClassifier
 {
     private readonly RandomForestConfig _config;
     private readonly Random _random;
+    private readonly ConcurrentDictionary<string, SensorBaselineState> _sensorBaselines;
 
     private static readonly double[] FeatureWeights = new double[]
     {
@@ -77,12 +84,30 @@ public class RandomForestVocClassifier : IRandomForestVocClassifier
     {
         _config = config.Value;
         _random = new Random(Guid.NewGuid().GetHashCode());
+        _sensorBaselines = new ConcurrentDictionary<string, SensorBaselineState>();
     }
 
     public VocClassificationOutput Classify(VocSensorDataReceived sensorData)
     {
-        var inputVector = NormalizeInput(sensorData);
-        var distances = CalculateWeightedManhattanDistances(inputVector);
+        double[] rawVector = ExtractRawVocVector(sensorData);
+        double[] calibratedVector = rawVector;
+        bool calibrated = false;
+        double driftPct = 0.0;
+        int sampleCount = 0;
+        double[]? baselineVec = null;
+
+        if (_config.EnableBaselineCalibration)
+        {
+            var (calibratedData, state) = ApplyMedianBaselineCalibration(sensorData, rawVector);
+            calibratedVector = calibratedData;
+            calibrated = state.IsCalibrated;
+            driftPct = state.DriftPercentage;
+            sampleCount = state.SampleCount;
+            baselineVec = state.CurrentBaseline;
+        }
+
+        var normalizedInput = NormalizeCalibratedVector(calibratedVector);
+        var distances = CalculateWeightedManhattanDistances(normalizedInput);
         var probabilities = CalculateSoftmaxProbabilities(distances);
 
         var topSpecies = probabilities.OrderByDescending(kv => kv.Value).First().Key;
@@ -114,7 +139,11 @@ public class RandomForestVocClassifier : IRandomForestVocClassifier
             DecisionTreeVotes = votes,
             OobErrorRateBps = oobBps,
             FeatureImportanceGiniTop3 = giniTop3,
-            SynergisticPestFungiIndex = synergyIndex
+            SynergisticPestFungiIndex = synergyIndex,
+            BaselineCalibrated = calibrated,
+            BaselineDriftPct = driftPct,
+            BaselineSampleCount = sampleCount,
+            CurrentBaselineVector = baselineVec
         };
     }
 
@@ -259,5 +288,158 @@ public class RandomForestVocClassifier : IRandomForestVocClassifier
         var combined = 0.25 * totalVocFactor + 0.35 * marginFactor + 0.4 * octen3olFactor;
         var noise = 0.9 + _random.NextDouble() * 0.2;
         return Math.Round(Math.Clamp(combined * noise, 0.0, 1.0), 4);
+    }
+
+    private static double[] ExtractRawVocVector(VocSensorDataReceived data)
+    {
+        return new[]
+        {
+            data.ToluenePPB,
+            data.XylenePPB,
+            data.EthylbenzenePPB,
+            data.FormaldehydePPB,
+            data.AcetaldehydePPB,
+            data._1Octen3OlPPB,
+            data.GeosminPPT,
+            data._2MethylisoborneolPPT,
+            data.TotalVolatilePPB
+        };
+    }
+
+    private static double[] NormalizeCalibratedVector(double[] calibrated)
+    {
+        var maxValues = new[] { 500.0, 400.0, 300.0, 100.0, 80.0, 50.0, 2000.0, 1500.0, 1000.0 };
+        var normalized = new double[9];
+        for (int i = 0; i < 9; i++)
+            normalized[i] = Math.Min(Math.Max(calibrated[i], 0.0) / maxValues[i], 1.0);
+        return normalized;
+    }
+
+    private (double[] CalibratedData, SensorBaselineState State) ApplyMedianBaselineCalibration(
+        VocSensorDataReceived sensorData,
+        double[] rawVector)
+    {
+        var sensorKey = string.IsNullOrEmpty(sensorData.SensorCode)
+            ? "default_sensor"
+            : sensorData.SensorCode;
+
+        var state = _sensorBaselines.GetOrAdd(sensorKey, _ => new SensorBaselineState
+        {
+            WindowSize = _config.BaselineWindowSize
+        });
+
+        lock (state)
+        {
+            state.PushSample(rawVector);
+
+            if (state.SampleCount < _config.MinimumSamplesForBaseline)
+            {
+                return (rawVector, new SensorBaselineState
+                {
+                    IsCalibrated = false,
+                    SampleCount = state.SampleCount,
+                    CurrentBaseline = state.CurrentBaseline,
+                    DriftPercentage = 0.0
+                });
+            }
+
+            var movingMedian = state.ComputeWindowMedian();
+
+            if (state.InitialBaseline == null)
+            {
+                state.InitialBaseline = (double[])movingMedian.Clone();
+            }
+
+            double driftPct = ComputeDriftPercentage(state.InitialBaseline, movingMedian);
+
+            if (driftPct > _config.BaselineDriftThresholdPct)
+            {
+                var alpha = _config.BaselineUpdateFactor;
+                for (int i = 0; i < 9; i++)
+                {
+                    state.AdjustedBaseline[i] = state.AdjustedBaseline[i] * (1 - alpha) + movingMedian[i] * alpha;
+                }
+            }
+
+            if (sensorData.Temperature.HasValue)
+            {
+                double tempCompensation = _config.TemperatureCompensationCoeff * (sensorData.Temperature.Value - 25.0);
+                for (int i = 0; i < 9; i++)
+                {
+                    state.AdjustedBaseline[i] *= 1.0 + tempCompensation;
+                }
+            }
+
+            var calibrated = new double[9];
+            for (int i = 0; i < 9; i++)
+            {
+                calibrated[i] = Math.Max(0.0, rawVector[i] - state.AdjustedBaseline[i] * 0.8);
+            }
+
+            state.CurrentBaseline = (double[])state.AdjustedBaseline.Clone();
+            state.DriftPercentage = driftPct;
+            state.IsCalibrated = true;
+
+            return (calibrated, new SensorBaselineState
+            {
+                IsCalibrated = true,
+                SampleCount = state.SampleCount,
+                CurrentBaseline = (double[])state.AdjustedBaseline.Clone(),
+                DriftPercentage = driftPct
+            });
+        }
+    }
+
+    private static double ComputeDriftPercentage(double[] initial, double[] current)
+    {
+        double totalDrift = 0.0;
+        int validCount = 0;
+        for (int i = 0; i < initial.Length; i++)
+        {
+            if (initial[i] > 0.001)
+            {
+                totalDrift += Math.Abs(current[i] - initial[i]) / initial[i];
+                validCount++;
+            }
+        }
+        return validCount > 0 ? totalDrift / validCount : 0.0;
+    }
+
+    private sealed class SensorBaselineState
+    {
+        public int WindowSize { get; set; }
+        private readonly List<double[]> _sampleWindow = new();
+        public double[]? InitialBaseline { get; set; }
+        public double[] AdjustedBaseline { get; set; } = new double[9];
+        public double[] CurrentBaseline { get; set; } = new double[9];
+        public int SampleCount { get; private set; }
+        public bool IsCalibrated { get; set; }
+        public double DriftPercentage { get; set; }
+
+        public void PushSample(double[] sample)
+        {
+            _sampleWindow.Add((double[])sample.Clone());
+            if (_sampleWindow.Count > WindowSize)
+                _sampleWindow.RemoveAt(0);
+            SampleCount++;
+        }
+
+        public double[] ComputeWindowMedian()
+        {
+            int n = _sampleWindow.Count;
+            if (n == 0) return new double[9];
+
+            var median = new double[9];
+            for (int dim = 0; dim < 9; dim++)
+            {
+                var values = _sampleWindow.Select(s => s[dim]).OrderBy(v => v).ToList();
+                int mid = n / 2;
+                median[dim] = n % 2 == 0
+                    ? (values[mid - 1] + values[mid]) / 2.0
+                    : values[mid];
+            }
+
+            return median;
+        }
     }
 }

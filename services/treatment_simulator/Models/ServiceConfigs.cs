@@ -29,6 +29,13 @@ public class ProbitStageParameters
     public double Beta { get; set; }
 }
 
+public class PestSpeciesTolerance
+{
+    public double LD50Multiplier { get; set; } = 1.0;
+    public double BetaMultiplier { get; set; } = 1.0;
+    public double DoseEfficiencyMultiplier { get; set; } = 1.0;
+}
+
 public class ProbitModelConfig
 {
     public ProbitStageParameters Eggs { get; set; } = new()
@@ -58,6 +65,17 @@ public class ProbitModelConfig
         LD50Minutes = 340.0,
         Beta = 2.8
     };
+
+    public Dictionary<string, PestSpeciesTolerance> PestTolerance { get; set; } = new()
+    {
+        { "LepismaSaccharina", new PestSpeciesTolerance { LD50Multiplier = 1.00, BetaMultiplier = 1.00, DoseEfficiencyMultiplier = 1.00 } },
+        { "CtenolepismaLongicaudata", new PestSpeciesTolerance { LD50Multiplier = 1.05, BetaMultiplier = 0.95, DoseEfficiencyMultiplier = 0.98 } },
+        { "AttagenusPellio", new PestSpeciesTolerance { LD50Multiplier = 1.18, BetaMultiplier = 0.90, DoseEfficiencyMultiplier = 0.92 } },
+        { "TineolaBisselliella", new PestSpeciesTolerance { LD50Multiplier = 0.88, BetaMultiplier = 1.08, DoseEfficiencyMultiplier = 1.08 } },
+        { "AnthrenusVerbasci", new PestSpeciesTolerance { LD50Multiplier = 1.28, BetaMultiplier = 0.85, DoseEfficiencyMultiplier = 0.88 } }
+    };
+
+    public bool EnablePestSpeciesCorrection { get; set; } = true;
 
     public double StandardOxygenPct { get; set; } = 0.5;
     public double ReferenceTempC { get; set; } = 24.0;

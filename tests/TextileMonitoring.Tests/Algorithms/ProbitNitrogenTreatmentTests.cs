@@ -502,4 +502,104 @@ public class ProbitNitrogenTreatmentTests
         Assert.True(_config.Fungi.Beta < _config.Eggs.Beta,
             "Fungi should have shallower dose-response (lower beta) than eggs");
     }
+
+    [Fact]
+    public void PestSpeciesCorrection_ResistantSpecies_HigherLD50()
+    {
+        var requestBase = new NitrogenTreatmentRequest
+        {
+            TextileId = 40000,
+            TargetOrganisms = TreatmentTarget.LarvaeOnly,
+            TargetOxygenConcentrationPct = 0.5,
+            NitrogenFlowRateLpm = 12,
+            ExposureDurationMinutes = 120,
+            ChamberTemperatureC = 24,
+            ChamberHumidityPct = 45
+        };
+
+        var requestAnthrenus = requestBase with
+        {
+            TextileId = 40001,
+            PrimaryPestTarget = PestSpecies.AnthrenusVerbasci
+        };
+        var requestTineola = requestBase with
+        {
+            TextileId = 40002,
+            PrimaryPestTarget = PestSpecies.TineolaBisselliella
+        };
+
+        var resultAnthrenus = _simulator.SimulateTreatment(requestAnthrenus);
+        var resultTineola = _simulator.SimulateTreatment(requestTineola);
+
+        Assert.True(resultAnthrenus.PredictedLarvaeMortalityRate < resultTineola.PredictedLarvaeMortalityRate,
+            $"Resistant species (Anthrenus) should have lower mortality than susceptible (Tineola) at same exposure: " +
+            $"Anthrenus={resultAnthrenus.PredictedLarvaeMortalityRate:F2}%, Tineola={resultTineola.PredictedLarvaeMortalityRate:F2}%");
+
+        Assert.True(resultAnthrenus.MinimumRequiredExposureMin > resultTineola.MinimumRequiredExposureMin,
+            "Resistant species should require longer minimum exposure time");
+    }
+
+    [Fact]
+    public void PestSpeciesCorrection_NoSpeciesProvided_UsesDefaultParameters()
+    {
+        var requestNoSpecies = new NitrogenTreatmentRequest
+        {
+            TextileId = 40100,
+            TargetOrganisms = TreatmentTarget.AllStages,
+            TargetOxygenConcentrationPct = 0.5,
+            NitrogenFlowRateLpm = 12,
+            ExposureDurationMinutes = 480,
+            ChamberTemperatureC = 24,
+            ChamberHumidityPct = 45,
+            PrimaryPestTarget = null
+        };
+
+        var result = _simulator.SimulateTreatment(requestNoSpecies);
+
+        Assert.NotNull(result);
+        Assert.InRange(result.PredictedEggMortalityRate, 0.0, 100.0);
+        Assert.InRange(result.PredictedLarvaeMortalityRate, 0.0, 100.0);
+        Assert.True(result.MinimumRequiredExposureMin > 0);
+    }
+
+    [Fact]
+    public void PestSpeciesCorrection_OrderingMatchesToleranceRanking()
+    {
+        var species = new[]
+        {
+            PestSpecies.TineolaBisselliella,
+            PestSpecies.LepismaSaccharina,
+            PestSpecies.CtenolepismaLongicaudata,
+            PestSpecies.AttagenusPellio,
+            PestSpecies.AnthrenusVerbasci
+        };
+
+        var ld99BySpecies = new Dictionary<PestSpecies, double>();
+
+        foreach (var sp in species)
+        {
+            var request = new NitrogenTreatmentRequest
+            {
+                TextileId = 40200 + (int)sp,
+                TargetOrganisms = TreatmentTarget.LarvaeOnly,
+                TargetOxygenConcentrationPct = 0.5,
+                NitrogenFlowRateLpm = 12,
+                ExposureDurationMinutes = 100,
+                ChamberTemperatureC = 24,
+                ChamberHumidityPct = 45,
+                PrimaryPestTarget = sp
+            };
+
+            var result = _simulator.SimulateTreatment(request);
+            ld99BySpecies[sp] = result.CalculatedLethalDoseLD99Min;
+        }
+
+        var ordered = ld99BySpecies.OrderBy(kv => kv.Value).ToList();
+
+        Assert.Equal(PestSpecies.TineolaBisselliella, ordered.First().Key);
+        Assert.Equal(PestSpecies.AnthrenusVerbasci, ordered.Last().Key);
+
+        Assert.True(ld99BySpecies[PestSpecies.AnthrenusVerbasci] > ld99BySpecies[PestSpecies.LepismaSaccharina],
+            "Anthrenus (most resistant) should have higher LD99 than Lepisma (baseline)");
+    }
 }

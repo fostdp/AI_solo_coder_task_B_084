@@ -448,4 +448,132 @@ public class RandomForestVocTests
                     resultNormal.EstimatedGrowthDays < resultExtreme.EstimatedGrowthDays,
             "Normal temp/humidity should promote faster mold growth than extreme conditions");
     }
+
+    [Fact]
+    public void BaselineCalibration_MovingMedian_StabilizesPredictions()
+    {
+        var sensorCode = "VOC-CALIB-TEST";
+        var baseVoc = new VocSensorDataReceived
+        {
+            TextileId = 30000,
+            SensorCode = sensorCode,
+            ToluenePPB = 50,
+            XylenePPB = 40,
+            EthylbenzenePPB = 30,
+            FormaldehydePPB = 20,
+            AcetaldehydePPB = 15,
+            _1Octen3OlPPB = 3.0,
+            GeosminPPT = 50,
+            _2MethylisoborneolPPT = 40,
+            TotalVolatilePPB = 200,
+            Temperature = 25,
+            Humidity = 60
+        };
+
+        for (int i = 0; i < 15; i++)
+        {
+            var sample = baseVoc with
+            {
+                TextileId = 30000 + i,
+                ToluenePPB = baseVoc.ToluenePPB * (0.95 + i * 0.003)
+            };
+            _classifier.Classify(sample);
+        }
+
+        var resultWithDrift = _classifier.Classify(baseVoc with { TextileId = 30100 });
+
+        Assert.True(resultWithDrift.BaselineCalibrated || resultWithDrift.BaselineSampleCount > 0,
+            "After multiple samples, baseline state should be tracked");
+        Assert.True(resultWithDrift.BaselineSampleCount >= 10,
+            $"Sample count should accumulate (count={resultWithDrift.BaselineSampleCount})");
+    }
+
+    [Fact]
+    public void BaselineCalibration_InitialSamples_Uncalibrated()
+    {
+        var sensorCode = "VOC-NEW-SENSOR";
+        var firstSample = new VocSensorDataReceived
+        {
+            TextileId = 31000,
+            SensorCode = sensorCode,
+            ToluenePPB = 10,
+            XylenePPB = 8,
+            EthylbenzenePPB = 5,
+            FormaldehydePPB = 5,
+            AcetaldehydePPB = 3,
+            _1Octen3OlPPB = 0.5,
+            GeosminPPT = 10,
+            _2MethylisoborneolPPT = 8,
+            TotalVolatilePPB = 50
+        };
+
+        var result = _classifier.Classify(firstSample);
+
+        Assert.False(result.BaselineCalibrated,
+            "First sample should not have calibrated baseline");
+        Assert.Equal(1, result.BaselineSampleCount);
+        Assert.NotNull(result);
+        Assert.NotEqual(MoldSpeciesFromVoc.Unknown, result.PredictedSpecies);
+    }
+
+    [Fact]
+    public void BaselineDriftDetection_SignificantDrift_UpdatesBaseline()
+    {
+        var sensorCode = "VOC-DRIFT-TEST";
+        var rnd = new Random(42);
+
+        var baselineVoc = new VocSensorDataReceived
+        {
+            TextileId = 32000,
+            SensorCode = sensorCode,
+            ToluenePPB = 20,
+            XylenePPB = 15,
+            EthylbenzenePPB = 10,
+            FormaldehydePPB = 8,
+            AcetaldehydePPB = 6,
+            _1Octen3OlPPB = 1.0,
+            GeosminPPT = 20,
+            _2MethylisoborneolPPT = 15,
+            TotalVolatilePPB = 80
+        };
+
+        double? firstBaselineTotal = null;
+        for (int i = 0; i < 12; i++)
+        {
+            var sample = baselineVoc with
+            {
+                TextileId = 32000 + i,
+                ToluenePPB = baselineVoc.ToluenePPB * (0.98 + rnd.NextDouble() * 0.04)
+            };
+            var result = _classifier.Classify(sample);
+            if (i == 11 && result.CurrentBaselineVector != null)
+                firstBaselineTotal = result.CurrentBaselineVector.Sum();
+        }
+
+        var driftedVoc = baselineVoc with
+        {
+            TextileId = 32100,
+            ToluenePPB = baselineVoc.ToluenePPB * 1.5,
+            XylenePPB = baselineVoc.XylenePPB * 1.5,
+            TotalVolatilePPB = baselineVoc.TotalVolatilePPB * 1.4
+        };
+
+        for (int i = 0; i < 25; i++)
+        {
+            var sample = driftedVoc with
+            {
+                TextileId = 32200 + i,
+                ToluenePPB = driftedVoc.ToluenePPB * (0.97 + rnd.NextDouble() * 0.06)
+            };
+            _classifier.Classify(sample);
+        }
+
+        var finalResult = _classifier.Classify(driftedVoc with { TextileId = 32300 });
+
+        Assert.NotNull(finalResult.CurrentBaselineVector);
+        Assert.True(finalResult.BaselineDriftPct > 0,
+            $"Drift percentage should be > 0 after shift (drift={finalResult.BaselineDriftPct:F4})");
+        Assert.True(finalResult.BaselineSampleCount > 20,
+            $"Sample count should be high after many samples (count={finalResult.BaselineSampleCount})");
+    }
 }
