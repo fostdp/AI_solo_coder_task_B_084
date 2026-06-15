@@ -301,4 +301,205 @@ public class ProbitNitrogenTreatmentTests
             "LD99 must be above LD50 for eggs (185min)");
         Assert.True(result.MinimumRequiredExposureMin > result.CalculatedLethalDoseLD99Min * 0.5);
     }
+
+    [Fact]
+    public void LD50Values_ConsistentWithPublishedLiterature_DeviationWithin5Percent()
+    {
+        var literatureLD50 = new Dictionary<TreatmentTarget, double>
+        {
+            { TreatmentTarget.EggsOnly, 185.0 },
+            { TreatmentTarget.LarvaeOnly, 98.0 },
+            { TreatmentTarget.AdultOnly, 132.0 },
+            { TreatmentTarget.FungiSterilization, 340.0 }
+        };
+
+        var modelLD50 = new Dictionary<TreatmentTarget, double>
+        {
+            { TreatmentTarget.EggsOnly, _config.Eggs.LD50Minutes },
+            { TreatmentTarget.LarvaeOnly, _config.Larvae.LD50Minutes },
+            { TreatmentTarget.AdultOnly, _config.Adult.LD50Minutes },
+            { TreatmentTarget.FungiSterilization, _config.Fungi.LD50Minutes }
+        };
+
+        foreach (var kvp in literatureLD50)
+        {
+            var stage = kvp.Key;
+            var litValue = kvp.Value;
+            var modelValue = modelLD50[stage];
+            var deviation = Math.Abs(modelValue - litValue) / litValue;
+
+            Assert.True(deviation < 0.05,
+                $"Stage {stage}: LD50 model={modelValue}min, literature={litValue}min, deviation={deviation:P2} exceeds 5%");
+        }
+    }
+
+    [Fact]
+    public void EmpiricalLD50_EggsAtStandardConditions_MatchesConfigWithin3Percent()
+    {
+        const double targetOxygen = 0.5;
+        const double flowRate = 12.0;
+        const double temp = 24.0;
+        var tempFactor = 1.0;
+        var stage = _config.Eggs;
+
+        double FindExposureForMortality(double targetMortality)
+        {
+            double low = 1, high = 500;
+            for (int iter = 0; iter < 50; iter++)
+            {
+                var mid = (low + high) / 2;
+                var request = new NitrogenTreatmentRequest
+                {
+                    TextileId = 9999,
+                    TargetOrganisms = TreatmentTarget.EggsOnly,
+                    TargetOxygenConcentrationPct = targetOxygen,
+                    NitrogenFlowRateLpm = flowRate,
+                    ExposureDurationMinutes = (int)Math.Round(mid),
+                    ChamberTemperatureC = temp,
+                    ChamberHumidityPct = 45
+                };
+                var result = _simulator.SimulateTreatment(request);
+                if (result.PredictedEggMortalityRate < targetMortality)
+                    low = mid;
+                else
+                    high = mid;
+            }
+            return (low + high) / 2;
+        }
+
+        var empiricalLD50 = FindExposureForMortality(50.0);
+        var deviation = Math.Abs(empiricalLD50 - stage.LD50Minutes) / stage.LD50Minutes;
+
+        Assert.True(deviation < 0.03,
+            $"Empirical egg LD50={empiricalLD50:F1}min, config LD50={stage.LD50Minutes}min, deviation={deviation:P2} > 3%");
+    }
+
+    [Fact]
+    public void LD50Ordering_LarvaeMostSusceptible_FungiMostResistant()
+    {
+        var ld50Values = new[]
+        {
+            new { Stage = "Larvae", LD50 = _config.Larvae.LD50Minutes },
+            new { Stage = "Adult", LD50 = _config.Adult.LD50Minutes },
+            new { Stage = "Eggs", LD50 = _config.Eggs.LD50Minutes },
+            new { Stage = "Fungi", LD50 = _config.Fungi.LD50Minutes }
+        };
+
+        var ordered = ld50Values.OrderBy(x => x.LD50).ToList();
+
+        Assert.Equal("Larvae", ordered[0].Stage);
+        Assert.Equal("Fungi", ordered[3].Stage);
+        Assert.True(ordered[0].LD50 < ordered[1].LD50);
+        Assert.True(ordered[1].LD50 < ordered[2].LD50);
+        Assert.True(ordered[2].LD50 < ordered[3].LD50);
+    }
+
+    [Theory]
+    [InlineData(0.01, 1, 24, 45)]
+    [InlineData(10.0, 43200, 24, 45)]
+    [InlineData(0.5, 1, 24, 45)]
+    [InlineData(0.5, 43200, 24, 45)]
+    public void SimulateTreatment_BoundaryConditions_ReturnsValidMortality(
+        double o2Pct, int durationMin, double temp, double hum)
+    {
+        var request = new NitrogenTreatmentRequest
+        {
+            TextileId = 10000 + (int)(o2Pct * 100),
+            TargetOrganisms = TreatmentTarget.AllStages,
+            TargetOxygenConcentrationPct = o2Pct,
+            NitrogenFlowRateLpm = 12,
+            ExposureDurationMinutes = durationMin,
+            ChamberTemperatureC = temp,
+            ChamberHumidityPct = hum
+        };
+
+        var result = _simulator.SimulateTreatment(request);
+
+        Assert.NotNull(result);
+        Assert.InRange(result.PredictedEggMortalityRate, 0.0, 100.0);
+        Assert.InRange(result.PredictedLarvaeMortalityRate, 0.0, 100.0);
+        Assert.InRange(result.PredictedAdultMortalityRate, 0.0, 100.0);
+        Assert.InRange(result.PredictedFungiSterilityRate, 0.0, 100.0);
+    }
+
+    [Theory]
+    [InlineData(25.0, 1440, 24, 45)]
+    [InlineData(-5.0, 1440, 24, 45)]
+    [InlineData(0.5, -60, 24, 45)]
+    [InlineData(0.5, 1440, -20, 45)]
+    [InlineData(0.5, 1440, 24, -5)]
+    [InlineData(0.5, 1440, 24, 110)]
+    public void SimulateTreatment_OutOfRangeInputs_ClampedGracefully(
+        double o2Pct, int durationMin, double temp, double hum)
+    {
+        var request = new NitrogenTreatmentRequest
+        {
+            TextileId = 20000 + Math.Abs((int)o2Pct),
+            TargetOrganisms = TreatmentTarget.AllStages,
+            TargetOxygenConcentrationPct = o2Pct,
+            NitrogenFlowRateLpm = 12,
+            ExposureDurationMinutes = durationMin,
+            ChamberTemperatureC = temp,
+            ChamberHumidityPct = hum
+        };
+
+        var result = _simulator.SimulateTreatment(request);
+
+        Assert.NotNull(result);
+        Assert.InRange(result.PredictedEggMortalityRate, 0.0, 100.0);
+        Assert.InRange(result.FiberStrengthDegradationEstimatedPct, 0.0, 50.0);
+        Assert.InRange(result.ColorChangeDeltaE, 0.0, 20.0);
+        Assert.True(result.RecommendedSafetyExposureMin >= 0);
+    }
+
+    [Fact]
+    public void MortalityResponse_SigmoidalShape_ProperGradient()
+    {
+        var o2Levels = new[] { 0.1, 0.5, 1.0, 2.0, 5.0 };
+        var mortalityByO2 = new List<double>();
+
+        foreach (var o2 in o2Levels)
+        {
+            var request = new NitrogenTreatmentRequest
+            {
+                TextileId = 30000 + (int)(o2 * 10),
+                TargetOrganisms = TreatmentTarget.LarvaeOnly,
+                TargetOxygenConcentrationPct = o2,
+                NitrogenFlowRateLpm = 12,
+                ExposureDurationMinutes = 120,
+                ChamberTemperatureC = 24,
+                ChamberHumidityPct = 45
+            };
+            var result = _simulator.SimulateTreatment(request);
+            mortalityByO2.Add(result.PredictedLarvaeMortalityRate);
+        }
+
+        for (int i = 0; i < mortalityByO2.Count - 1; i++)
+        {
+            Assert.True(mortalityByO2[i] >= mortalityByO2[i + 1],
+                $"O2={o2Levels[i]}% mortality={mortalityByO2[i]:F1} should be >= O2={o2Levels[i + 1]}% mortality={mortalityByO2[i + 1]:F1}");
+        }
+
+        var maxDrop = 0.0;
+        for (int i = 0; i < mortalityByO2.Count - 1; i++)
+        {
+            var drop = mortalityByO2[i] - mortalityByO2[i + 1];
+            if (drop > maxDrop) maxDrop = drop;
+        }
+        Assert.True(maxDrop > 10, "Sigmoidal curve should have a steep region with >10% mortality drop");
+    }
+
+    [Fact]
+    public void BetaValues_StageSpecific_SlopeSensitivityConsistent()
+    {
+        Assert.Equal(3.2, _config.Eggs.Beta, 2);
+        Assert.Equal(4.1, _config.Larvae.Beta, 2);
+        Assert.Equal(3.6, _config.Adult.Beta, 2);
+        Assert.Equal(2.8, _config.Fungi.Beta, 2);
+
+        Assert.True(_config.Larvae.Beta > _config.Eggs.Beta,
+            "Larvae should have steeper dose-response (higher beta) than eggs");
+        Assert.True(_config.Fungi.Beta < _config.Eggs.Beta,
+            "Fungi should have shallower dose-response (lower beta) than eggs");
+    }
 }
