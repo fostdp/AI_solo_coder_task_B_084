@@ -189,4 +189,31 @@ namespace TextileMonitoring.API.DTOs
         public decimal AvgHoleDensity { get; set; }
         public decimal AvgFungiCFU { get; set; }
     }
+
+    public class ZigBeeDustPayloadDto
+    {
+        public string SensorCode { get; set; } = string.Empty;
+        public string ZigBeeAddress { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
+        public decimal PM2_5 { get; set; }
+        public decimal PM10 { get; set; }
+        public decimal FrassDensity { get; set; }
+        public decimal Temperature { get; set; }
+        public decimal Humidity { get; set; }
+        public int HoleCount { get; set; }
+        public short SignalStrength { get; set; }
+    }
+
+    public class ZigBeeFungiPayloadDto
+    {
+        public string SensorCode { get; set; } = string.Empty;
+        public string ZigBeeAddress { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
+        public decimal SporeCount { get; set; }
+        public decimal FungiCFU { get; set; }
+        public decimal Temperature { get; set; }
+        public decimal Humidity { get; set; }
+        public string DominantFungiType { get; set; } = string.Empty;
+        public short SignalStrength { get; set; }
+    }
 }

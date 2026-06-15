@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using TextileMonitoring.API.Data;
 using TextileMonitoring.API.Services;
+using TextileMonitoring.API.SqlServer;
+using TextileMonitoring.API.ZigBee;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +45,9 @@ builder.Services.AddScoped<IPredictionService, PredictionService>();
 builder.Services.AddScoped<IAlertNotificationService, AlertNotificationService>();
 builder.Services.AddScoped<IAlertService, AlertService>();
 builder.Services.AddScoped<ISensorDataService, SensorDataService>();
+builder.Services.AddScoped<ISqlServerBatchWriter, SqlServerBatchWriter>();
+
+builder.Services.AddHostedService<ZigBeeUdpListener>();
 
 builder.Services.AddCors(options =>
 {
@@ -81,5 +86,7 @@ app.MapFallbackToFile("index.html");
 app.Logger.LogInformation("古代织绣品虫蛀与霉变协同监测系统启动成功！");
 app.Logger.LogInformation("监听地址: http://localhost:5000");
 app.Logger.LogInformation("Swagger文档: http://localhost:5000/swagger");
+app.Logger.LogInformation("ZigBee监听器: 端口8684 (BackgroundService托管)");
+app.Logger.LogInformation("ODE求解器: MathNet.Numerics + RK45自适应步长 (ode/solver.cs)");
 
 app.Run("http://0.0.0.0:5000");
