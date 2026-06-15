@@ -1,14 +1,41 @@
-using MathNet.Numerics.Distributions;
 using Microsoft.Extensions.Options;
+using Microsoft.ML;
+using Microsoft.ML.Data;
 using PestClassifier.Service.Models;
+using TextileMonitoring.Contracts.Enums;
 using TextileMonitoring.Contracts.Messages;
 
 namespace PestClassifier.Service.Services;
 
-public class CnnFrassClassifierService
+public interface ICnnFrassClassifierService
+{
+    (PestClassificationResult Result, double InferenceLatencyMs) Classify(FrassImageCaptured image);
+}
+
+public class CnnFrassClassifierService : ICnnFrassClassifierService
 {
     private readonly CnnClassifierConfig _config;
     private readonly Random _random;
+    private readonly MLContext _mlContext;
+    private readonly ITransformer _trainedModel;
+    private readonly PredictionEngine<FrassFeatureData, PestPrediction> _predictionEngine;
+
+    public class FrassFeatureData
+    {
+        [LoadColumn(0)] public float Ellipticity { get; set; }
+        [LoadColumn(1)] public float AspectRatio { get; set; }
+        [LoadColumn(2)] public float Solidity { get; set; }
+        [LoadColumn(3)] public float MeanGrayscale { get; set; }
+        [LoadColumn(4)] public float TextureEntropy { get; set; }
+        [LoadColumn(5)] public float AverageParticleArea { get; set; }
+        [LoadColumn(6)] public string? Label { get; set; }
+    }
+
+    public class PestPrediction
+    {
+        [ColumnName("PredictedLabel")] public string PredictedSpecies { get; set; } = string.Empty;
+        [ColumnName("Score")] public float[] SpeciesScores { get; set; } = Array.Empty<float>();
+    }
 
     private static readonly Dictionary<PestSpecies, PestFeatureProfile> SpeciesProfiles = new()
     {
@@ -215,6 +242,107 @@ public class CnnFrassClassifierService
         _config = config.Value;
         _random = new Random(Guid.NewGuid().GetHashCode());
         _fineTunedProfiles = BuildFineTunedProfiles();
+        _mlContext = new MLContext(seed: 42);
+
+        var trainingData = GenerateTrainingData();
+        _trainedModel = TrainMulticlassClassifier(trainingData);
+        _predictionEngine = _mlContext.Model.CreatePredictionEngine<FrassFeatureData, PestPrediction>(_trainedModel);
+    }
+
+    private List<FrassFeatureData> GenerateTrainingData()
+    {
+        var trainingData = new List<FrassFeatureData>();
+        var profiles = _config.EnableTransferLearning ? _fineTunedProfiles : SpeciesProfiles;
+        int samplesPerSpecies = 120;
+
+        foreach (var profile in profiles.Values)
+        {
+            for (int i = 0; i < samplesPerSpecies; i++)
+            {
+                var noise = _random.NextDouble() * _config.AugmentationNoiseStdDev * 2 - _config.AugmentationNoiseStdDev;
+                var jitter = (_random.NextDouble() - 0.5) * 2.0 * _config.FeatureJitterRange;
+                double dropout = _random.NextDouble() < _config.DropoutRate ? 0.5 : 1.0;
+
+                double ApplyNoise(double value, double range)
+                {
+                    return Math.Clamp(value + noise + jitter, value - range, value + range) * dropout;
+                }
+
+                var sample = new FrassFeatureData
+                {
+                    Ellipticity = (float)ApplyNoise(profile.EllipticityIdeal, 0.15),
+                    AspectRatio = (float)ApplyNoise(profile.AspectRatioIdeal, 0.4),
+                    Solidity = (float)ApplyNoise(profile.SolidityIdeal, 0.15),
+                    MeanGrayscale = (float)ApplyNoise(profile.MeanGrayscaleIdeal, 0.15),
+                    TextureEntropy = (float)ApplyNoise(profile.TextureEntropyIdeal, 0.8),
+                    AverageParticleArea = (float)ApplyNoise(profile.AverageParticleAreaIdeal / 300.0, 0.2),
+                    Label = profile.Species.ToString()
+                };
+
+                trainingData.Add(sample);
+            }
+        }
+
+        return trainingData;
+    }
+
+    private List<FrassFeatureData> GenerateBaseModelTrainingData()
+    {
+        var trainingData = new List<FrassFeatureData>();
+        int samplesPerSpecies = 80;
+
+        foreach (var profile in BaseModelProfiles.Values)
+        {
+            for (int i = 0; i < samplesPerSpecies; i++)
+            {
+                var noise = _random.NextDouble() * 0.1 - 0.05;
+                var sample = new FrassFeatureData
+                {
+                    Ellipticity = (float)Math.Clamp(profile.EllipticityIdeal + noise, 0.01, 0.99),
+                    AspectRatio = (float)Math.Clamp(profile.AspectRatioIdeal + noise * 2, 1.0, 4.0),
+                    Solidity = (float)Math.Clamp(profile.SolidityIdeal + noise, 0.01, 0.99),
+                    MeanGrayscale = (float)Math.Clamp(profile.MeanGrayscaleIdeal + noise, 0.0, 1.0),
+                    TextureEntropy = (float)Math.Clamp(profile.TextureEntropyIdeal + noise * 4, 0.0, 10.0),
+                    AverageParticleArea = (float)Math.Clamp(profile.AverageParticleAreaIdeal / 300.0 + noise, 0.0, 1.0),
+                    Label = profile.Species.ToString()
+                };
+                trainingData.Add(sample);
+            }
+        }
+
+        return trainingData;
+    }
+
+    private ITransformer TrainMulticlassClassifier(List<FrassFeatureData> trainingData)
+    {
+        var dataView = _mlContext.Data.LoadFromEnumerable(trainingData);
+
+        var pipeline = _mlContext.Transforms.Conversion.MapValueToKey("Label")
+            .Append(_mlContext.Transforms.NormalizeMinMax("Features",
+                nameof(FrassFeatureData.Ellipticity),
+                nameof(FrassFeatureData.AspectRatio),
+                nameof(FrassFeatureData.Solidity),
+                nameof(FrassFeatureData.MeanGrayscale),
+                nameof(FrassFeatureData.TextureEntropy),
+                nameof(FrassFeatureData.AverageParticleArea)))
+            .Append(_mlContext.Transforms.Concatenate("Features",
+                nameof(FrassFeatureData.Ellipticity),
+                nameof(FrassFeatureData.AspectRatio),
+                nameof(FrassFeatureData.Solidity),
+                nameof(FrassFeatureData.MeanGrayscale),
+                nameof(FrassFeatureData.TextureEntropy),
+                nameof(FrassFeatureData.AverageParticleArea)))
+            .Append(_mlContext.MulticlassClassification.Trainers.SdcaMaximumEntropy(
+                labelColumnName: "Label",
+                featureColumnName: "Features",
+                maximumNumberOfIterations: 500,
+                l1Regularization: 0.01f,
+                l2Regularization: 0.02f))
+            .Append(_mlContext.Transforms.Conversion.MapKeyToValue("PredictedLabel"));
+
+        var model = pipeline.Fit(dataView);
+
+        return model;
     }
 
     private Dictionary<PestSpecies, PestFeatureProfile> BuildFineTunedProfiles()
@@ -267,60 +395,35 @@ public class CnnFrassClassifierService
         else
         {
             var normalizedFeatures = NormalizeFeatures(image);
-            var distances = CalculateWeightedDistances(normalizedFeatures);
-            probabilities = SoftmaxDistances(distances);
+            probabilities = ClassifyWithMLNET(normalizedFeatures);
         }
 
         probabilities = ApplyDecisionTreeNoise(probabilities);
 
-        var topSpecies = probabilities
-            .OrderByDescending(kvp => kvp.Value)
-            .First();
+        var ordered = probabilities.OrderByDescending(kv => kv.Value).ToList();
+        var topSpecies = ordered.First().Key;
+        var confidence = ordered.First().Value;
+        var secondConfidence = ordered.Count > 1 ? ordered[1].Value : 0.0;
+        var margin = confidence - secondConfidence;
 
-        var featureNorm = CalculateFeatureVectorNorm(image);
-        var predictedInstars = EstimateInstars(image, topSpecies.Key);
-        var estimatedPopulation = EstimatePopulation(image, probabilities);
-        var riskScore = CalculateRiskSeverity(probabilities, estimatedPopulation);
-        var recommendedAction = GetRecommendedAction(riskScore, topSpecies.Key);
+        var instars = _random.Next(_config.MinInstars, _config.MaxInstars + 1);
+        var estimatedPopulation = (int)Math.Round(
+            (image.ParticleCount + 1) * _config.BasePopulationPerParticle * instars);
 
-        var result = new PestClassificationResult
+        var riskScore = CalculateRiskScore(confidence, image, instars);
+
+        return (new PestClassificationResult
         {
-            CorrelationId = Guid.NewGuid(),
-            Timestamp = DateTime.UtcNow,
-            SourceImageCorrelationId = image.CorrelationId,
-            TextileId = image.TextileId,
-            SensorCode = image.SensorCode,
-            PredictedSpecies = topSpecies.Key,
-            Confidence = Math.Round(topSpecies.Value, 6),
-            SpeciesProbabilities = probabilities.ToDictionary(kvp => kvp.Key, kvp => Math.Round(kvp.Value, 6)),
-            ModelVersion = _config.ModelVersion,
-            InferenceLatencyMs = latency,
-            FeatureVectorNorm = Math.Round(featureNorm, 6),
-            PredictedInstars = predictedInstars,
-            EstimatedPopulationSize = Math.Round(estimatedPopulation, 2),
+            PredictedSpecies = topSpecies,
+            Confidence = confidence,
+            SpeciesProbabilities = probabilities,
+            EstimatedLarvalInstars = instars,
+            EstimatedPopulation = estimatedPopulation,
             RiskSeverityScore = riskScore,
-            RecommendedAction = recommendedAction
-        };
-
-        return (result, latency);
-    }
-
-    private static NormalizedFeatureVector NormalizeFeatures(FrassImageCaptured img)
-    {
-        var ellipticity = Math.Clamp(img.EllipticityMean, 0.0, 1.0);
-        var aspectRatio = Math.Clamp((img.AspectRatioMean - 1.0) / 3.0, 0.0, 1.0);
-        var solidity = Math.Clamp(img.SolidityMean, 0.0, 1.0);
-        var meanGrayscale = Math.Clamp(img.MeanGrayscale / 255.0, 0.0, 1.0);
-        var textureEntropy = Math.Clamp(img.TextureEntropy / 8.0, 0.0, 1.0);
-        var avgParticleArea = Math.Clamp((img.AverageParticleArea - 10.0) / 490.0, 0.0, 1.0);
-
-        return new NormalizedFeatureVector(
-            Ellipticity: ellipticity,
-            AspectRatio: aspectRatio,
-            Solidity: solidity,
-            MeanGrayscale: meanGrayscale,
-            TextureEntropy: textureEntropy,
-            AverageParticleArea: avgParticleArea);
+            ProbabilityMargin = margin,
+            InferenceLatencyMs = latency,
+            ModelVersion = _config.ModelVersion
+        }, latency);
     }
 
     private Dictionary<PestSpecies, double> ClassifyWithTta(FrassImageCaptured image)
@@ -334,8 +437,7 @@ public class CnnFrassClassifierService
         for (int i = 0; i < _config.TtaAugmentationCount; i++)
         {
             var augmented = AugmentFeatures(baseFeatures);
-            var distances = CalculateWeightedDistances(augmented);
-            var probs = SoftmaxDistances(distances);
+            var probs = ClassifyWithMLNET(augmented);
 
             foreach (var kvp in probs)
                 aggregated[kvp.Key] += kvp.Value;
@@ -343,6 +445,49 @@ public class CnnFrassClassifierService
 
         var sum = aggregated.Values.Sum();
         return aggregated.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum);
+    }
+
+    private Dictionary<PestSpecies, double> ClassifyWithMLNET(NormalizedFeatureVector features)
+    {
+        var input = new FrassFeatureData
+        {
+            Ellipticity = (float)features.Ellipticity,
+            AspectRatio = (float)features.AspectRatio,
+            Solidity = (float)features.Solidity,
+            MeanGrayscale = (float)features.MeanGrayscale,
+            TextureEntropy = (float)features.TextureEntropy,
+            AverageParticleArea = (float)features.AverageParticleArea
+        };
+
+        var prediction = _predictionEngine.Predict(input);
+
+        var probabilities = new Dictionary<PestSpecies, double>();
+        var speciesNames = Enum.GetNames<PestSpecies>();
+
+        for (int i = 0; i < speciesNames.Length; i++)
+        {
+            if (Enum.TryParse<PestSpecies>(speciesNames[i], out var species)
+                && i < prediction.SpeciesScores.Length)
+            {
+                probabilities[species] = Softmax(prediction.SpeciesScores)[i];
+            }
+        }
+
+        if (probabilities.Count == 0)
+        {
+            var fallback = CalculateWeightedDistances(features);
+            probabilities = SoftmaxDistances(fallback);
+        }
+
+        return probabilities;
+    }
+
+    private static double[] Softmax(float[] logits)
+    {
+        var max = logits.Max();
+        var exp = logits.Select(x => Math.Exp(x - max)).ToArray();
+        var sum = exp.Sum();
+        return exp.Select(x => x / sum).ToArray();
     }
 
     private NormalizedFeatureVector AugmentFeatures(NormalizedFeatureVector original)
@@ -380,6 +525,30 @@ public class CnnFrassClassifierService
             AverageParticleArea: Dropout(Jitter(original.AverageParticleArea)));
     }
 
+    private NormalizedFeatureVector NormalizeFeatures(FrassImageCaptured image)
+    {
+        double ClampNorm(double value, double min, double max)
+        {
+            var clamped = Math.Clamp(value, min, max);
+            return (clamped - min) / (max - min);
+        }
+
+        var ellipticity = ClampNorm(image.EllipticityMean, 0.0, 1.0);
+        var aspectRatio = ClampNorm(image.AspectRatioMean, 1.0, 4.0);
+        var solidity = ClampNorm(image.SolidityMean, 0.0, 1.0);
+        var meanGrayscale = ClampNorm(image.MeanGrayscale, 0.0, 255.0);
+        var textureEntropy = ClampNorm(image.TextureEntropy, 0.0, 10.0);
+        var particleArea = ClampNorm(image.AverageParticleArea, 0.0, 500.0);
+
+        return new NormalizedFeatureVector(
+            ellipticity,
+            aspectRatio,
+            solidity,
+            meanGrayscale,
+            textureEntropy,
+            particleArea);
+    }
+
     private Dictionary<PestSpecies, double> CalculateWeightedDistances(NormalizedFeatureVector features)
     {
         var distances = new Dictionary<PestSpecies, double>();
@@ -387,21 +556,14 @@ public class CnnFrassClassifierService
 
         foreach (var profile in profiles.Values)
         {
-            var normEllipticity = Math.Clamp((profile.EllipticityIdeal - 0.1) / 0.9, 0.0, 1.0);
-            var normAspectRatio = Math.Clamp((profile.AspectRatioIdeal - 1.0) / 3.0, 0.0, 1.0);
-            var normSolidity = Math.Clamp((profile.SolidityIdeal - 0.1) / 0.9, 0.0, 1.0);
-            var normGrayscale = Math.Clamp((profile.MeanGrayscaleIdeal - 0.1) / 0.9, 0.0, 1.0);
-            var normEntropy = Math.Clamp((profile.TextureEntropyIdeal - 2.0) / 6.0, 0.0, 1.0);
-            var normArea = Math.Clamp((profile.AverageParticleAreaIdeal - 10.0) / 490.0, 0.0, 1.0);
+            var dEllipticity = Math.Pow(features.Ellipticity - profile.EllipticityIdeal, 2) * profile.EllipticityWeight;
+            var dAspect = Math.Pow(features.AspectRatio - (profile.AspectRatioIdeal - 1.0) / 3.0, 2) * profile.AspectRatioWeight;
+            var dSolidity = Math.Pow(features.Solidity - profile.SolidityIdeal, 2) * profile.SolidityWeight;
+            var dGrayscale = Math.Pow(features.MeanGrayscale - profile.MeanGrayscaleIdeal, 2) * profile.MeanGrayscaleWeight;
+            var dEntropy = Math.Pow(features.TextureEntropy - profile.TextureEntropyIdeal / 10.0, 2) * profile.TextureEntropyWeight;
+            var dArea = Math.Pow(features.AverageParticleArea - profile.AverageParticleAreaIdeal / 500.0, 2) * profile.AverageParticleAreaWeight;
 
-            double dEllipticity = Math.Pow(features.Ellipticity - normEllipticity, 2) * profile.EllipticityWeight;
-            double dAspectRatio = Math.Pow(features.AspectRatio - normAspectRatio, 2) * profile.AspectRatioWeight;
-            double dSolidity = Math.Pow(features.Solidity - normSolidity, 2) * profile.SolidityWeight;
-            double dGrayscale = Math.Pow(features.MeanGrayscale - normGrayscale, 2) * profile.MeanGrayscaleWeight;
-            double dEntropy = Math.Pow(features.TextureEntropy - normEntropy, 2) * profile.TextureEntropyWeight;
-            double dArea = Math.Pow(features.AverageParticleArea - normArea, 2) * profile.AverageParticleAreaWeight;
-
-            distances[profile.Species] = Math.Sqrt(dEllipticity + dAspectRatio + dSolidity + dGrayscale + dEntropy + dArea);
+            distances[profile.Species] = Math.Sqrt(dEllipticity + dAspect + dSolidity + dGrayscale + dEntropy + dArea);
         }
 
         return distances;
@@ -409,194 +571,52 @@ public class CnnFrassClassifierService
 
     private Dictionary<PestSpecies, double> SoftmaxDistances(Dictionary<PestSpecies, double> distances)
     {
+        var tau = 0.1 / _config.TemperatureScale;
         var maxDist = distances.Values.Max();
-        var scaledScores = distances.ToDictionary(
+        var expNegDist = distances.ToDictionary(
             kvp => kvp.Key,
-            kvp => -(kvp.Value - maxDist) / _config.TemperatureScale);
+            kvp => Math.Exp(-(kvp.Value - maxDist) * tau));
 
-        var maxScore = scaledScores.Values.Max();
-        var expScores = scaledScores.ToDictionary(
-            kvp => kvp.Key,
-            kvp => Math.Exp(kvp.Value - maxScore));
-
-        var sumExp = expScores.Values.Sum();
-
-        return expScores.ToDictionary(
-            kvp => kvp.Key,
-            kvp => kvp.Value / sumExp);
+        var sum = expNegDist.Values.Sum();
+        return expNegDist.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum);
     }
 
     private Dictionary<PestSpecies, double> ApplyDecisionTreeNoise(Dictionary<PestSpecies, double> probabilities)
     {
+        var noiseLevel = _config.NoiseLevel;
         var result = new Dictionary<PestSpecies, double>();
-        var noiseVector = new double[probabilities.Count];
 
-        for (int i = 0; i < noiseVector.Length; i++)
-        {
-            noiseVector[i] = Normal.Sample(0, _config.NoiseLevel);
-        }
-
-        var idx = 0;
         foreach (var kvp in probabilities)
         {
-            result[kvp.Key] = Math.Max(0, kvp.Value + noiseVector[idx]);
-            idx++;
+            var noise = (_random.NextDouble() - 0.5) * 2.0 * noiseLevel;
+            result[kvp.Key] = Math.Clamp(kvp.Value + noise, 0.0, 1.0);
         }
 
         var sum = result.Values.Sum();
         if (sum > 0)
         {
-            result = result.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum);
+            return result.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum);
         }
 
-        return result;
+        return probabilities;
     }
 
-    private static double CalculateFeatureVectorNorm(FrassImageCaptured image)
+    private int CalculateRiskScore(double confidence, FrassImageCaptured image, int instars)
     {
-        double sumSq =
-            Math.Pow(image.EllipticityMean, 2) +
-            Math.Pow(image.AspectRatioMean / 3.0, 2) +
-            Math.Pow(image.SolidityMean, 2) +
-            Math.Pow(image.MeanGrayscale / 255.0, 2) +
-            Math.Pow(image.TextureEntropy / 8.0, 2) +
-            Math.Pow(image.AverageParticleArea / 500.0, 2);
+        var particleScore = Math.Min(image.ParticleCount / 100.0, 1.0) * 40;
+        var confidenceScore = confidence * 30;
+        var instarScore = (instars / 5.0) * 20;
+        var areaScore = Math.Min(image.AverageParticleArea / 300.0, 1.0) * 10;
 
-        return Math.Sqrt(sumSq);
+        var total = particleScore + confidenceScore + instarScore + areaScore;
+        return (int)Math.Clamp(Math.Round(total), 1, 100);
     }
-
-    private int EstimateInstars(FrassImageCaptured image, PestSpecies topSpecies)
-    {
-        double areaScore = Math.Clamp(image.AverageParticleArea / 300.0, 0.0, 1.0);
-        double densityScore = Math.Clamp(image.FrassDensityCorrelated / 5.0, 0.0, 1.0);
-        double grayscaleShift = 0.0;
-
-        switch (topSpecies)
-        {
-            case PestSpecies.AttagenusPellio:
-                grayscaleShift = image.MeanGrayscale / 255.0 * 0.3;
-                break;
-            case PestSpecies.TineolaBisselliella:
-                grayscaleShift = (1.0 - image.SolidityMean) * 0.25;
-                break;
-            case PestSpecies.LepismaSaccharina:
-                grayscaleShift = image.EllipticityMean * 0.2;
-                break;
-            case PestSpecies.CtenolepismaLongicaudata:
-                grayscaleShift = image.TextureEntropy / 8.0 * 0.25;
-                break;
-            case PestSpecies.AnthrenusVerbasci:
-                grayscaleShift = (1.0 - image.AspectRatioMean / 3.0) * 0.2;
-                break;
-        }
-
-        double combined = 0.5 * areaScore + 0.3 * densityScore + 0.2 * grayscaleShift;
-        double instarFloat = _config.MinInstars + combined * (_config.MaxInstars - _config.MinInstars);
-
-        var jitter = Normal.Sample(0, 0.4);
-        int instar = (int)Math.Round(instarFloat + jitter);
-
-        return Math.Clamp(instar, _config.MinInstars, _config.MaxInstars);
-    }
-
-    private double EstimatePopulation(FrassImageCaptured image, Dictionary<PestSpecies, double> probabilities)
-    {
-        double topProb = probabilities.Values.Max();
-        double particleFactor = image.ParticleCount * _config.BasePopulationPerParticle;
-        double densityFactor = Math.Pow(Math.Clamp(image.FrassDensityCorrelated, 0.1, 10.0), 1.15);
-        double areaFactor = Math.Pow(Math.Clamp(image.AverageParticleArea / 100.0, 0.1, 5.0), 0.7);
-        double confidenceFactor = 0.4 + 0.6 * topProb;
-
-        double basePopulation = particleFactor * densityFactor * areaFactor * confidenceFactor;
-
-        double jitter = Normal.Sample(0, basePopulation * 0.12);
-        double finalPopulation = Math.Max(1.0, basePopulation + jitter);
-
-        return Math.Round(finalPopulation, 2);
-    }
-
-    private static int CalculateRiskSeverity(Dictionary<PestSpecies, double> probabilities, double estimatedPopulation)
-    {
-        var top = probabilities.OrderByDescending(kvp => kvp.Value).First();
-        double speciesRisk = top.Key switch
-        {
-            PestSpecies.TineolaBisselliella => 1.35,
-            PestSpecies.AttagenusPellio => 1.25,
-            PestSpecies.AnthrenusVerbasci => 1.15,
-            PestSpecies.LepismaSaccharina => 1.00,
-            PestSpecies.CtenolepismaLongicaudata => 0.95,
-            _ => 1.0
-        };
-
-        double populationScore = estimatedPopulation switch
-        {
-            < 5 => 1,
-            < 20 => 2,
-            < 50 => 3,
-            < 100 => 4,
-            _ => 5
-        };
-
-        double confidenceScore = top.Value switch
-        {
-            < 0.4 => 1,
-            < 0.6 => 2,
-            < 0.75 => 3,
-            < 0.9 => 4,
-            _ => 5
-        };
-
-        double combined = (populationScore * 0.5 + confidenceScore * 0.2 + 3 * 0.3) * speciesRisk;
-        return (int)Math.Clamp(Math.Round(combined), 1, 5);
-    }
-
-    private static string GetRecommendedAction(int riskScore, PestSpecies species)
-    {
-        var baseAction = riskScore switch
-        {
-            1 => "常规监测，无需额外处理",
-            2 => "加强监测频率，建议2周内复检",
-            3 => "建议局部低温处理或靶向氮气熏蒸",
-            4 => "立即启动全面氮气熏蒸处理程序",
-            5 => "紧急隔离文物并启动全面除虫方案",
-            _ => "持续监测"
-        };
-
-        string? speciesNote = species switch
-        {
-            PestSpecies.TineolaBisselliella => "；注意检查羊绒丝绸类织物",
-            PestSpecies.AttagenusPellio => "；检查动物毛皮及羽毛制品",
-            PestSpecies.AnthrenusVerbasci => "；检查标本及混合纤维区域",
-            PestSpecies.LepismaSaccharina => "；重点关注潮湿区域纤维素织物",
-            PestSpecies.CtenolepismaLongicaudata => "；关注高温区域及淀粉类上浆织物",
-            _ => null
-        };
-
-        return baseAction + speciesNote;
-    }
-
-    private sealed class PestFeatureProfile
-    {
-        public PestSpecies Species { get; init; }
-        public double EllipticityIdeal { get; init; }
-        public double EllipticityWeight { get; init; }
-        public double AspectRatioIdeal { get; init; }
-        public double AspectRatioWeight { get; init; }
-        public double SolidityIdeal { get; init; }
-        public double SolidityWeight { get; init; }
-        public double MeanGrayscaleIdeal { get; init; }
-        public double MeanGrayscaleWeight { get; init; }
-        public double TextureEntropyIdeal { get; init; }
-        public double TextureEntropyWeight { get; init; }
-        public double AverageParticleAreaIdeal { get; init; }
-        public double AverageParticleAreaWeight { get; init; }
-    }
-
-    private sealed record NormalizedFeatureVector(
-        double Ellipticity,
-        double AspectRatio,
-        double Solidity,
-        double MeanGrayscale,
-        double TextureEntropy,
-        double AverageParticleArea);
 }
+
+public record NormalizedFeatureVector(
+    double Ellipticity,
+    double AspectRatio,
+    double Solidity,
+    double MeanGrayscale,
+    double TextureEntropy,
+    double AverageParticleArea);

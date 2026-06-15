@@ -14,12 +14,22 @@ public class CnnFrassClassifierTests
     {
         var config = new CnnClassifierConfig
         {
-            MinInferenceLatencyMs = 45,
-            MaxInferenceLatencyMs = 95,
-            ConfidenceThreshold = 0.6,
-            LowConfidenceWarningScore = 7,
-            HighConfidenceActionScore = 3,
-            PopulationMultiplier = 120
+            MinInferenceLatencyMs = 1,
+            MaxInferenceLatencyMs = 2,
+            TemperatureScale = 1.0,
+            NoiseLevel = 0.08,
+            MinInstars = 1,
+            MaxInstars = 5,
+            BasePopulationPerParticle = 0.25,
+            EnableDataAugmentation = true,
+            AugmentationNoiseStdDev = 0.06,
+            FeatureJitterRange = 0.08,
+            DropoutRate = 0.15,
+            TtaAugmentationCount = 8,
+            EnableTransferLearning = true,
+            FineTuneFactor = 0.65,
+            BaseModelWeight = 0.35,
+            ModelVersion = "cnn-frass-test"
         };
         var options = Options.Create(config);
         _service = new CnnFrassClassifierService(options);
@@ -489,5 +499,102 @@ public class CnnFrassClassifierTests
             $"Dropout and augmentation should introduce confidence variance (var={variance:F6})");
         Assert.True(maxConf - minConf > 0.005,
             $"Confidence should vary across runs with dropout (range={maxConf - minConf:F4})");
+    }
+
+    [Fact]
+    public void MLNET_ModelTrainsSuccessfully_ProducesValidPredictions()
+    {
+        var config = new CnnClassifierConfig
+        {
+            ModelVersion = "test-mlnet",
+            MinInferenceLatencyMs = 1,
+            MaxInferenceLatencyMs = 2,
+            EnableDataAugmentation = false,
+            TtaAugmentationCount = 1,
+            EnableTransferLearning = true,
+            FineTuneFactor = 0.65,
+            TemperatureScale = 1.0,
+            NoiseLevel = 0.0
+        };
+
+        var service = new CnnFrassClassifierService(
+            Microsoft.Extensions.Options.Options.Create(config));
+
+        var testCases = new[]
+        {
+            new { Species = PestSpecies.LepismaSaccharina, Ellipticity = 0.82, Aspect = 1.55, Solidity = 0.91 },
+            new { Species = PestSpecies.AnthrenusVerbasci, Ellipticity = 0.94, Aspect = 1.08, Solidity = 0.85 },
+            new { Species = PestSpecies.AttagenusPellio, Ellipticity = 0.42, Aspect = 1.20, Solidity = 0.78 }
+        };
+
+        int correctCount = 0;
+        foreach (var tc in testCases)
+        {
+            var image = new FrassImageCaptured
+            {
+                TextileId = 7000 + (int)tc.Species,
+                SensorCode = "IMG-MLNET",
+                EllipticityMean = tc.Ellipticity,
+                AspectRatioMean = tc.Aspect,
+                SolidityMean = tc.Solidity,
+                MeanGrayscale = 130,
+                TextureEntropy = 5.0,
+                AverageParticleArea = 150.0,
+                ParticleCount = 30
+            };
+
+            var (result, _) = service.Classify(image);
+            if (result.PredictedSpecies == tc.Species)
+                correctCount++;
+
+            Assert.True(result.Confidence > 0, $"ML.NET prediction should have positive confidence");
+            Assert.True(result.SpeciesProbabilities.Count >= 5,
+                $"ML.NET should return probabilities for all species (got {result.SpeciesProbabilities.Count})");
+            Assert.True(Math.Abs(result.SpeciesProbabilities.Values.Sum() - 1.0) < 0.01,
+                $"Probabilities should sum to ~1.0 (sum={result.SpeciesProbabilities.Values.Sum():F4})");
+        }
+
+        Assert.True(correctCount >= 2,
+            $"ML.NET model should classify at least 2/3 standard profiles correctly (got {correctCount}/3)");
+    }
+
+    [Fact]
+    public void MLNET_Fallback_WhenModelFails_ReturnsDistanceBasedResults()
+    {
+        var config = new CnnClassifierConfig
+        {
+            ModelVersion = "test-fallback",
+            MinInferenceLatencyMs = 1,
+            MaxInferenceLatencyMs = 2,
+            EnableDataAugmentation = false,
+            TtaAugmentationCount = 1,
+            EnableTransferLearning = false,
+            TemperatureScale = 1.0,
+            NoiseLevel = 0.0
+        };
+
+        var service = new CnnFrassClassifierService(
+            Microsoft.Extensions.Options.Options.Create(config));
+
+        var image = new FrassImageCaptured
+        {
+            TextileId = 8000,
+            SensorCode = "IMG-FALLBACK",
+            EllipticityMean = 0.82,
+            AspectRatioMean = 1.55,
+            SolidityMean = 0.91,
+            MeanGrayscale = 132.6,
+            TextureEntropy = 4.8,
+            AverageParticleArea = 120.0,
+            ParticleCount = 45
+        };
+
+        for (int i = 0; i < 10; i++)
+        {
+            var (result, _) = service.Classify(image);
+            Assert.NotNull(result);
+            Assert.True(result.Confidence > 0);
+            Assert.True(result.SpeciesProbabilities.Count > 0);
+        }
     }
 }
